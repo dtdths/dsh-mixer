@@ -493,11 +493,32 @@ window.__ModuleLoader__.load({
           const railFrames = [...host.querySelectorAll('[class*="_frame"]')]
             .filter(element => element.querySelector('[data-index]') !== null).length
           const marks = host.querySelectorAll('[data-index]').length
+          /* Deciding between the two ways the rail can be missing:
+             - `turns` counts the distinct turns actually painted (every turn node
+               carries data-chat-turn), so turns >= 2 with marks = 0 means the rail's
+               item list is empty even though turns exist.
+             - `tail` reports the reading state's own output attribute: ChatView omits
+               data-chat-following-tail when it is NOT following the tail, and the
+               reading state must have published at least once for the rail to render
+               at all, so a missing attribute on an untouched pane points at
+               "never initialized".
+             - `railAny` counts rail frames regardless of marks, separating "no frame
+               rendered" from "frame rendered with no marks". */
+          const turnKeys = new Set()
+          for (const element of host.querySelectorAll('[data-chat-turn]')) {
+            turnKeys.add(element.getAttribute('data-chat-turn'))
+          }
+          const railAny = host.querySelectorAll('[class*="_frame"]').length
+          const tail = host.querySelector('[data-chat-following-tail]') !== null
           setProbe({
+            w: host.offsetWidth,
             h: host.offsetHeight,
             s: scroll === null ? -1 : scroll.offsetHeight,
             c: scroll === null ? -1 : scroll.scrollHeight,
             n: host.querySelectorAll('*').length,
+            turns: turnKeys.size,
+            railAny,
+            tail,
             rail: railFrames,
             marks,
             band: band === '' ? 'unset' : band,
@@ -510,8 +531,11 @@ window.__ModuleLoader__.load({
       }, [])
       const probeText = probe === null
         ? '测量中'
-        : `h=${probe.h} scroll=${probe.s}/${probe.c} nodes=${probe.n}`
-          + ` · 轮次导航 rail=${probe.rail} 标记=${probe.marks} band=${probe.band} - composer=${probe.composer}`
+        : `w=${probe.w} h=${probe.h} scroll=${probe.s}/${probe.c} nodes=${probe.n}`
+          /* The rail is hidden below 900px of pane width by a HOST container query
+             (ui-chat TurnNavigator.module.css: `@container (max-width: 900px) { .frame { display: none } }`),
+             so width is part of the reading, not noise. */
+          + ` · 轮次导航 rail=${probe.rail} 标记=${probe.marks} 轮次=${probe.turns} 宽=${probe.w}px（<900 宿主隐藏） band=${probe.band}`
       return h('div', { style: { flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' } },
         h('div', { style: CSS.diagLine, 'data-mixer-real-mode': mode },
           `${mode === 'pinned' ? '真实·标签' : '真实·默认'} · blank=${String(blank)} running=${String(running)} · ${probeText}`),

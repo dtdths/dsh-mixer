@@ -254,17 +254,28 @@ renderFactorySlot('conversation.content', input, { slots: { views: Views } })
 - 注册 slot 前确认该键在父条目的 `children` 里被声明过；渲染未声明的键同样抛错。
 - 不修改别的条目的 store（本次因此改用"钉住视图"而非写 conversation store）。
 
-## 8.5 已知的宿主行为：轮次导航（对话右侧的竖排标记）
+## 8.5 已知的宿主行为：轮次导航在窄格子里被隐藏（已确证）
 
-它**不是插件要补的东西**，也不需要"每格单独加" —— 轮次导航由 `ui-chat` 的 `ChatView` 自己渲染，属于**每个视图实例**，所以每格天然各有一份。
+**结论：不是插件的问题，每格本来就各有一份轮次导航，但宿主按宽度把它藏了。**
 
-排查"格子里看不到它"时，按这三条依次核对（都已确证）：
+`ui-chat` 的 `ChatView` 自己渲染轮次导航（对话右侧那条竖排标记），属于**每个视图实例**，所以每个通道天然独立持有。它消失只有一个原因：
 
-1. **轮数门槛**：`TurnNavigator.tsx:227` 有 `if (items.length < 2) return null` —— 少于 2 个轮次**根本不渲染**。同一个会话在原版能看到、在格子里看不到，就不可能是这条（数据相同）。
-2. **视图类型**：它是 **chat 视图**的一部分。若该格停在 `轨迹` 视图，就没有它。
-3. **高度来源**：`.frame` 的高度是 `--turn-rail-band: calc(var(--dsh-conversation-viewport-height) - var(--dsh-composer-height))`，这两个变量由 `ConversationContent` 的 `ResizeObserver` 发布在滚动容器 `[data-conversation-scroll]` 上。变量缺失时会走 fallback（`100dvh - 152px`），通常仍可见；但若 `--dsh-conversation-viewport-height` 被写成 0，rail 就会塌成不可见。
+```css
+/* ui-chat/src/client/chat/TurnNavigator.module.css:207 */
+@container (max-width: 900px) {
+  .frame { display: none; }
+}
+```
 
-原型里为此加了 DOM 探针，真实模式下每格诊断行会打印：`轮次导航 rail=<rail 框架数> 标记=<data-index 元素数> band=<视口高> - composer=<输入区高>`。**rail=0 且标记=0** 指向第 1 条；**band=0** 指向第 3 条。
+`.slot` 上声明了 `container-type: inline-size`，所以这个 **900px 指的是对话容器自身的宽度** —— 在调音台里就是**那一格的宽度**。原版视图占满窗口，所以一直可见；格子默认 380px（两三格约 700–800px）都被判为过窄而隐藏。**把某一格拉到 900px 以上，轮次导航就出现**（用户实测确认）。
+
+**对设计的影响**：想在一格里看到轮次导航，那一格必须 > 900px。可用手段：
+
+- 拖分界线把某格拉宽（§5.4 已实现）；
+- V3 变体的"聚焦格自动变宽"（若宽度足够）；
+- 若要在窄格里也显示，只能**覆盖宿主这条容器查询**（插件注入作用域规则重新 `display` 该 rail）——但宿主隐藏它正是因为窄，强行显示会压到转写正文右侧，需要单独决定。
+
+**排查手法（已内置）**：真实模式每格诊断行会打印 `轮次导航 rail=/标记=/轮次=/宽=/band=`。判据：**轮次≥2 且 宽<900 → 被宿主隐藏**（预期行为）；**轮次≥2 且 宽>900 且 rail=0 → 才是真异常**。
 
 ## 9. 未决 / 后续
 
