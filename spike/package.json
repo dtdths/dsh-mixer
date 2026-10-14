@@ -23,6 +23,9 @@
     "client": {
       "platform": "web",
       "immediately": true,
+      "external": [
+        "@deepseek-ai/dsh-client-ui-primitives"
+      ],
       "inject": [
         "@deepseek-ai/dsh-client-ui-commands",
         "@deepseek-ai/dsh-client-ui-conversation",

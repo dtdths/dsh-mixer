@@ -163,7 +163,17 @@ renderFactorySlot('conversation.content', input, { slots: { views: Views } })
 ```
 
 - **面包屑**：由 `parentId` 上溯生成（最多 6 级、带环保护）；祖先用次级文字，末级加粗。子会话显示成 `父 / 子`。
-- **执行中 loading**：会话正在执行/思考时，在面包屑**之前**显示转圈指示。用中性灰，**不占用**等待态的强调色。
+- **执行中 loading**：会话正在执行/思考时，在面包屑**之前**显示指示。**直接复用宿主自己的状态点**，不要自绘：
+
+  ```js
+  // package.json: dsh.client.external 声明该包，模块表才会提供它
+  const { StateDot } = require('@deepseek-ai/dsh-client-ui-primitives')
+  h(StateDot, { state: 'ongoing', size: 12 })
+  ```
+
+  `StateDot state="ongoing"` 就是左侧栏会话行用的那个 loading（细轨 + 呼吸弧 + 持续旋转），并且**它已自行处理 `prefers-reduced-motion`**，还会把并发的多个 loader 对齐到同一相位。等待态、完成态也在同一套词汇里（`warning` / `done` / `idle` / `error`），将来要加别的状态标记同样用它。
+
+  `require` **必须 try/catch**：模块表若解析不到该包，未捕获的异常会在 factory 里抛出并让整个条目失败（第 4 轮那类事故）。降级为一个中性小圆点即可，绝不能让视图起不来。
 - **等待态（V2，已选变体）**：**只有一个信号** —— 等待的通道在**头部行**左侧一条 2px `state-warn-primary` 竖条（`box-shadow: inset 2px 0 0 0`）。**不要**表面提亮、**不要**标题加重、**不要**胶囊，尤其**不要**把竖条画到整格（会横跨对话区，太抢眼）。等待类型（等待审批 / 等待计划确认 / 等待回答）作为头部行的 **tooltip** 提供，不占像素。
 - **输入激活态**：焦点进入该格内容区时，整格加激活描边。**必须用宿主自己的聚焦约定**：`outline: 2px solid var(--dsw-alias-state-business-primary)` + `outline-offset: -2px`（`ui-theme/src/styles/focus.css` 就是用这个颜色与宽度）。**不要**用 `border-l2` 之类的弱边框色 —— 与面板间那 1px 分隔线几乎不可分辨，等于没做。注意宿主 composer **自己把 outline 关掉了且没有替代反馈**（`InputBar.module.css` 里只有 `outline: none`，没有 `:focus-within`），所以这层反馈必须由插件画。焦点监听只挂内容区（点标签或 `×` 不点亮）。
 - **关闭 `×`**：把该格移出调音台（保留 retain，顶栏汇总可放回）。

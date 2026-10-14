@@ -38,6 +38,25 @@ window.__ModuleLoader__.load({
     const h = React.createElement
     const { useState, useEffect, useCallback, useMemo, useRef } = React
 
+    /**
+     * Reuse the host's own state dot for the "AI is running" indicator, so the
+     * mixer matches the left sidebar's session rows exactly instead of hand-rolling
+     * a spinner. `StateDot state="ongoing"` is that same loading glyph (a quiet
+     * ring plus a breathing arc), and it already handles `prefers-reduced-motion`
+     * and keeps concurrent loaders in phase.
+     *
+     * Declared as `dsh.client.external` in package.json. The read is guarded on
+     * purpose: a module the table cannot resolve would otherwise throw inside the
+     * factory and fail the whole entry (the round-4 class of incident), so the
+     * indicator simply falls back to a plain dot.
+     */
+    let StateDot = null
+    try {
+      StateDot = require('@deepseek-ai/dsh-client-ui-primitives').StateDot
+    } catch (error) {
+      console.error('[mixer-proto] ui-primitives unavailable, running dot falls back', error)
+    }
+
     const PANEL_ID = 'mixer'
     /** Our own Session reference source; never `mainView` (see docs/adr/0001). */
     const SOURCE = 'mixerChannel'
@@ -211,11 +230,12 @@ window.__ModuleLoader__.load({
         textOverflow: 'ellipsis', maxWidth: 220,
       },
       crumbSep: { color: T.fg2, opacity: 0.6 },
-      /* Running indicator: neutral grey, deliberately not the warning accent. */
-      spinner: {
-        flex: '0 0 auto', width: 11, height: 11, borderRadius: PILL,
-        border: `2px solid ${T.b1}`, borderTopColor: T.fg2,
-        animation: 'dsh-mixer-spin .8s linear infinite',
+      /* Running indicator: the host's own StateDot, same as the sidebar rows.
+         These two styles only cover the wrapper and the no-primitives fallback. */
+      runningWrap: { flex: '0 0 auto', display: 'inline-flex', alignItems: 'center' },
+      runningFallback: {
+        width: 8, height: 8, borderRadius: PILL,
+        background: 'var(--dsw-alias-label-tertiary)',
       },
       closeBtn: {
         flex: '0 0 auto', width: 18, height: 18, lineHeight: '16px', textAlign: 'center',
@@ -681,15 +701,18 @@ window.__ModuleLoader__.load({
           'data-mixer-head': '',
           title: isWaiting ? (KIND_LABEL[waitingKind] || '等待你处理') : undefined,
         },
-          /* Running first: the user asked for the spinner ahead of the breadcrumb. */
+          /* Running first: the user asked for the spinner ahead of the breadcrumb.
+             Same glyph as the sidebar's session rows (`StateDot state="ongoing"`). */
           running === true
             ? h('span', {
-                style: CSS.spinner,
+                style: CSS.runningWrap,
                 'data-mixer-loading': 'yes',
                 role: 'status',
                 'aria-label': 'AI 正在执行',
                 title: 'AI 正在执行',
-              })
+              }, StateDot === null
+                ? h('span', { style: CSS.runningFallback })
+                : h(StateDot, { state: 'ongoing', size: 12 }))
             : null,
           h('nav', { style: CSS.crumbs, 'aria-label': '会话层级' },
             crumbs.map((crumb, crumbIndex) => h(React.Fragment, { key: crumb.id },
@@ -942,11 +965,6 @@ window.__ModuleLoader__.load({
       }
 
       return h('div', { style: CSS.root },
-        /* The running spinner is the one place this prototype animates. It reports
-           state, so it is motivated; reduced motion disables it. */
-        h('style', { key: 'mixer-keyframes' },
-          '@keyframes dsh-mixer-spin{to{transform:rotate(360deg)}}'
-          + '@media (prefers-reduced-motion: reduce){[data-mixer-loading]{animation:none}}'),
         h(TopBar, {
           variant,
           channels: visible,

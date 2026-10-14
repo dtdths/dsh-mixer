@@ -37,7 +37,7 @@ const ReactStub = {
   useRef: (initial) => ({ current: initial }),
 }
 
-async function loadDefinition(path) {
+async function loadDefinition(path, { withPrimitives = true } = {}) {
   let captured
   globalThis.window = {
     __ModuleLoader__: { load: (definition) => { captured = definition } },
@@ -45,10 +45,16 @@ async function loadDefinition(path) {
     removeEventListener: () => {},
   }
   globalThis.document = { querySelector: () => null, activeElement: null }
-  await import(`${path}?t=${Date.now()}`)
+  await import(`${path}?t=${Date.now()}-${withPrimitives ? 'p' : 'n'}`)
   if (captured === undefined) throw new Error(`${path} never called __ModuleLoader__.load`)
   return captured.factory((name) => {
     if (name === 'react') return ReactStub
+    /* `dsh.client.external` packages arrive through this table. Both branches are
+       exercised: the mixer must survive the primitives being absent. */
+    if (name === '@deepseek-ai/dsh-client-ui-primitives') {
+      if (!withPrimitives) throw new Error(`module "${name}" is not in the table`)
+      return { StateDot: (props) => ({ type: 'svg', props: { 'data-state': props.state } }) }
+    }
     throw new Error(`unexpected require('${name}')`)
   })
 }
@@ -89,10 +95,14 @@ const controlRoot = makeContext({ withCommandUi: false }).root
 const control = await start(controlRoot, { inject: ['slots'], apply: (ctx) => { void ctx.commandUi } })
 
 const definition = await loadDefinition(new URL('./client.js', import.meta.url).pathname)
+/* Same entry, but the primitives package is missing from the module table: the
+   guarded require must degrade to the fallback dot, never fail the entry. */
+const definitionWithoutPrimitives = await loadDefinition(
+  new URL('./client.js', import.meta.url).pathname, { withPrimitives: false })
 
-async function boot({ withCommandUi }) {
+async function boot({ withCommandUi }, loaded = definition) {
   const { root, registrations, commands } = makeContext({ withCommandUi })
-  const outcome = await start(root, definition)
+  const outcome = await start(root, loaded)
   return { ...outcome, registrations, commands: commands.map(c => c.name) }
 }
 
@@ -100,6 +110,7 @@ const results = {
   control_expectedToFail: control,
   cold_boot_without_commandUi: await boot({ withCommandUi: false }),
   boot_with_commandUi: await boot({ withCommandUi: true }),
+  boot_without_primitives: await boot({ withCommandUi: true }, definitionWithoutPrimitives),
 }
 console.log(JSON.stringify(results, null, 2))
 
@@ -115,6 +126,10 @@ if (cold.state !== 'ACTIVE' || cold.rejection !== null) {
 if (cold.commands.length !== 0) failures.push('commandUi absent: the slash command should simply not register')
 for (const slot of expectedSlots) {
   if (!cold.registrations.includes(slot)) failures.push(`cold boot did not register ${slot}`)
+}
+const noPrimitives = results.boot_without_primitives
+if (noPrimitives.state !== 'ACTIVE' || noPrimitives.rejection !== null) {
+  failures.push(`a missing ui-primitives module failed the entry: ${noPrimitives.state} (${noPrimitives.rejection})`)
 }
 const warm = results.boot_with_commandUi
 if (warm.state !== 'ACTIVE' || warm.rejection !== null) failures.push(`with commandUi the entry ended ${warm.state}`)
