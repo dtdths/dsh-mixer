@@ -176,18 +176,18 @@ renderFactorySlot('conversation.content', input, { slots: { views: Views } })
 
   `require` **必须 try/catch**：模块表若解析不到该包，未捕获的异常会在 factory 里抛出并让整个条目失败（第 4 轮那类事故）。降级为一个中性小圆点即可，绝不能让视图起不来。
 - **等待态（V2，已选变体）**：**只有一个信号** —— 等待的通道在**头部行**左侧一条 2px `state-warn-primary` 竖条（`box-shadow: inset 2px 0 0 0`）。**不要**表面提亮、**不要**标题加重、**不要**胶囊，尤其**不要**把竖条画到整格（会横跨对话区，太抢眼）。等待类型（等待审批 / 等待计划确认 / 等待回答）作为头部行的 **tooltip** 提供，不占像素。
-- **输入激活态**：焦点进入该格的**输入框**时，只给**输入区**加激活描边 —— **不要把描边画在整格上**（用户反馈：那样是"整个会话"在发亮）。**必须用宿主自己的聚焦约定**：`outline: 2px solid var(--dsw-alias-state-business-primary)` + `outline-offset: -2px`（`ui-theme/src/styles/focus.css` 就是用这个颜色与宽度）。**不要**用 `border-l2` 之类的弱边框色 —— 与面板间那 1px 分隔线几乎不可分辨，等于没做。
+- **输入激活态**：焦点进入该格的**输入框**时，只给**输入卡片本身**加激活描边 —— **不要把描边画在整格上**（"整个会话在发亮"），也**不要画在 composer 外圈那条横带（seat）上**（它横跨输入框 + 工具栏 + dock，且没有圆角，看起来就是个难看的大方框）。**必须用宿主自己的聚焦约定**：`outline: 2px solid var(--dsw-alias-state-business-primary)`（`ui-theme/src/styles/focus.css` 就是用这个颜色与宽度）。**不要**用 `border-l2` 之类的弱边框色 —— 与面板间那 1px 分隔线几乎不可分辨，等于没做。
 
-  实现难点：真实模式下输入框是**官方 composer，拿不到 class**。可行做法是注入一条**作用域规则**，挂在宿主自己发布的稳定钩子上：
+  实现难点：真实模式下输入框是**官方 composer，拿不到 class**。可行做法是注入一条**作用域规则**，挂在宿主打在**卡片自身**上的稳定属性：
 
   ```css
-  [data-mixer-pane] [data-composer-seat]:focus-within {
+  [data-mixer-pane] [data-composer-card]:focus-within {
     outline: 2px solid var(--dsw-alias-state-business-primary);
-    outline-offset: -2px;
+    outline-offset: 0;   /* 贴着卡片自己的圆角（--dsw-radius-panel）画 */
   }
   ```
 
-  （`data-composer-seat` / `data-conversation-region="composer"` 是 `ConversationContent.tsx` 自己打在这条区域上的属性；输入卡片本身只有 CSS module 的哈希类名，不可依赖。）模拟内容模式则是自己的标记，直接在 composer 容器上按焦点状态加同一条描边即可。
+  宿主发布的三个钩子，按"越贴目标越好"取用：`data-composer-card`（**输入卡片**，首选）、`data-composer-seat`（包住整条 composer 带的座位）、`data-conversation-region="composer"`（同座位）。**不要**用 CSS module 的哈希类名（如 `GrXCZa_card`）—— DSH 一重建/升级就失效。模拟内容模式则是自己的标记，直接在 composer 容器上按焦点状态加同一条描边即可。
 
   两条依据：宿主 composer **自己把 outline 关掉了且没有替代反馈**（`InputBar.module.css` 里只有 `outline: none`，没有 `:focus-within`），所以这层反馈必须由插件画；焦点监听只挂内容区（点标签或 `×` 不点亮）。
 - **关闭 `×`**：把该格移出调音台（保留 retain，顶栏汇总可放回）。
