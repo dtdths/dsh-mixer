@@ -14,6 +14,14 @@
  * does, reads the fiber state, and carries an inline control that reproduces the
  * exact failure mode: if the control stops failing, this check is not proving
  * anything and will say so.
+ *
+ * Writing throwaway checks against this module, two rules that cost real time:
+ *   1. The module destructures React hooks (useState, useEffect, ...) from the
+ *      React stub AT FACTORY TIME. Install any hook stub before calling
+ *      `captured.factory(...)`; swapping `React.useState` afterwards silently
+ *      tests the old behaviour (hit this three times).
+ *   2. `apply()` may read services only through `ctx.inject`. A stub ctx must
+ *      therefore provide `inject(deps, callback)`, or apply() throws.
  */
 import { Context } from '/Users/user/Documents/code/deepseek-harness/vendor/cordis/lib/index.js'
 

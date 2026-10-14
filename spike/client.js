@@ -41,7 +41,14 @@ window.__ModuleLoader__.load({
     const PANEL_ID = 'mixer'
     /** Our own Session reference source; never `mainView` (see docs/adr/0001). */
     const SOURCE = 'mixerChannel'
+    /** Default channel set before the user has picked one (decision: ticket #6). */
     const PANE_LIMIT = 3
+    /** Fixed minimum pane width; more channels than fit scroll horizontally (#6). */
+    const MIN_PANE_W = 380
+    /* Persisted channel selection (#9). Namespaced like ui-sidebar-right's
+       `dsh.sidebar-right.v1`; the real build should go through the store
+       persistence convention instead of touching localStorage directly. */
+    const PERSIST_KEY = 'dsh.mixer-spike.v1'
     const PROTOTYPE = true
     const VARIANTS = ['V1', 'V2', 'V3']
     const VARIANT_NOTE = {
@@ -101,6 +108,30 @@ window.__ModuleLoader__.load({
       },
     ]
 
+    /** Read the persisted channel selection; any failure means "nothing stored". */
+    function loadStoredChannels() {
+      try {
+        const raw = window.localStorage.getItem(PERSIST_KEY)
+        if (raw === null || raw === undefined) return null
+        const parsed = JSON.parse(raw)
+        if (!Array.isArray(parsed)) return null
+        const ids = parsed.filter(id => typeof id === 'string' && id !== '')
+        return ids.length === 0 ? null : ids
+      } catch (error) {
+        console.error('[mixer-proto] stored channel selection unusable, ignoring it', error)
+        return null
+      }
+    }
+
+    /** Best-effort write; storage being unavailable must never break the view. */
+    function saveStoredChannels(ids) {
+      try {
+        window.localStorage.setItem(PERSIST_KEY, JSON.stringify(ids))
+      } catch (error) {
+        console.error('[mixer-proto] could not persist the channel selection', error)
+      }
+    }
+
     const CSS = {
       root: { display: 'flex', flexDirection: 'column', height: '100%', minHeight: 420, minWidth: 0, background: T.base, color: T.fg },
       /* Unified top bar: mixer label, workspace dropdown, waiting summary,
@@ -147,7 +178,12 @@ window.__ModuleLoader__.load({
       ddSub: { padding: '2px 8px 6px 26px', display: 'flex', flexDirection: 'column', gap: 2, borderLeft: `1px solid ${T.b1}`, marginLeft: 12 },
       ddSubRow: { display: 'flex', alignItems: 'center', gap: 7, padding: '3px 6px', cursor: 'pointer', font: `11.5px/1.6 ${SANS}` },
       backdrop: { position: 'fixed', inset: 0, zIndex: 39, background: 'transparent' },
-      grid: { display: 'grid', flex: 1, minHeight: 0, gap: 1, background: T.b1 },
+      /* Horizontal overflow is deliberate: each channel keeps MIN_PANE_W and the
+         row scrolls instead of squeezing (#6, user decision). */
+      grid: {
+        display: 'grid', flex: 1, minHeight: 0, gap: 1, background: T.b1,
+        overflowX: 'auto', overflowY: 'hidden',
+      },
       pane: { display: 'flex', flexDirection: 'column', minWidth: 0, minHeight: 0, background: T.base, overflow: 'hidden' },
       paneLifted: { background: T.l1 },
       dim: { opacity: 0.88 },
@@ -696,7 +732,11 @@ window.__ModuleLoader__.load({
 
     function Grid(props) {
       const { variant, ids, summaries, attention, focusId, SessionProvider, refFor, contentMode, views, running, onClose, renderFactorySlot } = props
-      const columns = ids.map(id => (variant === 'V3' && id === focusId ? '2.2fr' : '1fr')).join(' ')
+      /* Fixed minimum width per channel (#6): past what fits, the grid overflows
+         and its container scrolls horizontally rather than squeezing panes. */
+      const columns = ids
+        .map(id => `minmax(${MIN_PANE_W}px, ${variant === 'V3' && id === focusId ? 2.2 : 1}fr)`)
+        .join(' ')
       return h('div', { style: { ...CSS.grid, gridTemplateColumns: columns } },
         ids.map((id, index) => h(SessionProvider, { key: id, session: refFor(id) },
           h(Pane, {
@@ -766,13 +806,16 @@ window.__ModuleLoader__.load({
       const {
         useSessions, useSessionStatus, useWorkspaces, SessionProvider, renderFactorySlot, refFor,
         backToConversation, startSession, openWorkspace, collapseSidebar, restoreSidebar, listViews,
+        storedChannels,
       } = props
       const [variant, setVariant] = useState('V2')
       const [forced, setForced] = useState(true)
       const [forcedRunning, setForcedRunning] = useState(true)
       const [contentMode, setContentMode] = useState('mock')
       const [focusId, setFocusId] = useState(null)
-      const [channels, setChannels] = useState(null)
+      /* null = never picked anything, so fall back to the first few Sessions.
+         A stored selection (#9, user decision) wins over that default. */
+      const [channels, setChannels] = useState(storedChannels === undefined ? null : storedChannels)
       const [hidden, setHidden] = useState([])
 
       const list = useSessions(state => state)
@@ -791,6 +834,30 @@ window.__ModuleLoader__.load({
         collapseSidebar()
         return () => restoreSidebar()
       }, [collapseSidebar, restoreSidebar])
+
+      /* Persist the selection once the user owns one (#9, user decision: remember
+         it). The untouched default is never written, so first run stays clean. */
+      const listIds = list && list.ids ? list.ids : []
+      const listIdsKey = listIds.join(',')
+      useEffect(() => {
+        if (channels === null) return
+        saveStoredChannels(channels)
+      }, [channels])
+
+      /* Auto-remove a channel whose Session was closed or archived on the left
+         (#5, user decision). Two guards keep this from wiping the board: the Host
+         list must be populated (never prune against a still-loading list), and an
+         archived id always counts as gone. */
+      const archivedIds = workspaceState && workspaceState.archivedSessionIds
+        ? workspaceState.archivedSessionIds
+        : []
+      const archivedKey = archivedIds.join(',')
+      useEffect(() => {
+        if (channels === null) return
+        if (listIds.length === 0) return
+        const alive = channels.filter(id => listIds.includes(id) && !archivedIds.includes(id))
+        if (alive.length !== channels.length) setChannels(alive)
+      }, [channels, listIdsKey, archivedKey])
 
       /* Channels are ours (ticket #2 option c): default to the first three, then
          the dropdown and each pane's close button own the set. */
@@ -926,12 +993,18 @@ window.__ModuleLoader__.load({
           return reference
         }
         /* Closing a channel keeps its reference: the signal that it is waiting on
-           you must survive leaving the layout, or the whole point is lost. */
+           you must survive leaving the layout, or the whole point is lost. The
+           references also outlive the mixer view itself (user decision on #5:
+           never release on leaving), so they are only dropped on plugin unload. */
         const releaseAll = () => {
           for (const reference of refs.values()) reference.release()
           refs.clear()
         }
         ctx.effect(() => () => releaseAll())
+
+        /* Read the stored channel selection once, at plugin load, rather than on
+           every render of the inject factory. */
+        const storedChannels = loadStoredChannels()
 
         /* Prototype shortcut: read the frame's own collapsed marker instead of a
            layout API that does not expose it. A real build needs that API. */
@@ -964,6 +1037,7 @@ window.__ModuleLoader__.load({
             openWorkspace: (workspaceId) => ctx.uiWorkspace.openWorkspace(workspaceId),
             collapseSidebar,
             restoreSidebar,
+            storedChannels,
             /* Read the registered conversation views for the tab row. Guarded
                because `entries` is not part of the catalogued service face, even
                though shipped plugins (ui-settings-general) call it. */
