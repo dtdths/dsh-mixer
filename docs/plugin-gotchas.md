@@ -98,3 +98,22 @@ composer 区域的三层钩子，按"越贴目标越好"取用：
 **搜索陷阱**：这些钩子可能是**无值属性**（`data-composer-card` 后面没有 `=…`），用 `data-[a-z-]*=` 这种正则去 grep 会**全部漏掉**。查宿主钩子时要同时搜 `data-[a-z-]*\b`（无值）与 `data-[a-z-]*=`（有值）。这个坑让我一开始误以为"输入卡片没有稳定属性"，差点退回哈希类名。
 
 **取用原则**：钩子越外层，圈出来的框越大、越不像用户眼里的那个控件。先在浏览器里看一眼要圈的到底是哪一层，再选钩子。
+
+## 6. 复用宿主的拖拽协议，别给别人的 DOM 加属性
+
+宿主已经在关键行上实现了拖拽，**负载就是 SessionId**：
+
+```js
+// ui-workspace/src/client/rows/Rows.tsx（侧栏会话行）
+draggable={draggable}
+onDragStart={e => { e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', node.id) }}
+```
+
+所以插件想"接收一个会话被拖进来"，正确做法是**把自己做成放置目标**（`onDragOver` + `onDrop` 读 `text/plain`），而不是去给侧栏的行挂拖拽属性、或监听它的 DOM。后者既脆弱（别人的 DOM 会变）也违反"不读别的插件 DOM"的原则。
+
+要点：
+
+- `onDragOver` **必须** `preventDefault()`，否则 `drop` 永远不会触发；`types` 里可能有多种格式，按格式名取舍。
+- 拖拽过程中**读不到数据**（浏览器安全限制），只有 `drop` 时能 `getData`；所以位置计算与数据读取要分开：`dragover` 只算位置并画指示线，`drop` 才取 id。
+- 文本选中拖拽同样是 `text/plain`：**先验证 id 是已知会话**再改状态。
+- 落点索引是相对**当前渲染出的格子**算的；若被拖对象本来就在列表里，插入位要按"移除后"修正。
