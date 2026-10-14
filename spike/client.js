@@ -206,30 +206,32 @@ window.__ModuleLoader__.load({
         overflowX: 'auto', overflowY: 'hidden',
       },
       pane: { display: 'flex', flexDirection: 'column', minWidth: 0, minHeight: 0, background: T.base, overflow: 'hidden' },
-      /* Activation ring, drawn inside the pane. Colour and width follow the host's
-         own focus convention (ui-theme focus.css: 2px of --dsw-alias-state-business-primary);
-         the shipped composer paints none of its own. */
-      paneFocused: {
+      /* Activation ring: on the COMPOSER, not the whole pane (user feedback).
+         Real content is the shipped composer, which we cannot give a class to, so
+         the panel injects a scoped rule keyed on the host's stable
+         `[data-composer-seat]` hook. This style is the mock-mode equivalent. */
+      composerFocused: {
         outline: `2px solid ${T.business}`,
         outlineOffset: '-2px',
       },
       dim: { opacity: 0.88 },
+      /* Header: sized to actually be readable, since it carries the breadcrumb. */
       head: {
         display: 'flex', alignItems: 'center', gap: 8, flex: '0 0 auto',
-        padding: '4px 10px', borderBottom: `1px solid ${T.b1}`, font: `11px/1.7 ${MONO}`,
+        padding: '7px 12px', borderBottom: `1px solid ${T.b1}`, font: `12.5px/1.6 ${MONO}`,
         whiteSpace: 'nowrap', overflow: 'hidden',
       },
       /* V2's whole waiting signal: a warn stripe on the head row only. */
       headWaitingV2: { boxShadow: `inset 2px 0 0 0 ${T.warn}` },
       /* Breadcrumb: ancestors are plain text (this pane IS the destination), the
          last crumb carries the weight. */
-      crumbs: { display: 'flex', alignItems: 'center', gap: 5, minWidth: 0, overflow: 'hidden' },
-      crumb: { color: T.fg2, overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 160 },
+      crumbs: { display: 'flex', alignItems: 'center', gap: 6, minWidth: 0, overflow: 'hidden' },
+      crumb: { color: T.fg2, fontSize: 12.5, overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 180 },
       crumbCurrent: {
-        color: T.fg, fontWeight: 600, overflow: 'hidden',
-        textOverflow: 'ellipsis', maxWidth: 220,
+        color: T.fg, fontWeight: 600, fontSize: 14, overflow: 'hidden',
+        textOverflow: 'ellipsis', maxWidth: 280,
       },
-      crumbSep: { color: T.fg2, opacity: 0.6 },
+      crumbSep: { color: T.fg2, opacity: 0.6, fontSize: 12.5 },
       /* Running indicator: the host's own StateDot, same as the sidebar rows.
          These two styles only cover the wrapper and the no-primitives fallback. */
       runningWrap: { flex: '0 0 auto', display: 'inline-flex', alignItems: 'center' },
@@ -248,10 +250,10 @@ window.__ModuleLoader__.load({
          strict Session body honours (`viewId = view ?? active?.id`). */
       viewTabs: {
         display: 'flex', alignItems: 'center', gap: 2, flex: '0 0 auto',
-        padding: '0 10px', borderBottom: `1px solid ${T.b1}`,
+        padding: '0 12px', borderBottom: `1px solid ${T.b1}`,
       },
       viewTab: {
-        font: `11.5px/1.6 ${SANS}`, padding: '5px 9px', cursor: 'pointer', borderRadius: 0,
+        font: `12.5px/1.6 ${SANS}`, padding: '6px 11px', cursor: 'pointer', borderRadius: 0,
         color: T.fg2, background: 'transparent', border: 'none',
         borderBottom: '2px solid transparent',
       },
@@ -384,7 +386,9 @@ window.__ModuleLoader__.load({
             ? h(ApprovalCard, { task, kind: waitingKind, simulated: simulatedWaiting })
             : null,
         ),
-        h('div', { style: CSS.composer },
+        /* Mock-mode activation: ring the composer box itself, mirroring what the
+           injected rule does for the shipped composer in real mode. */
+        h('div', { style: focused ? { ...CSS.composer, ...CSS.composerFocused } : CSS.composer },
           h('textarea', {
             style: focused ? { ...CSS.textarea, ...CSS.textareaFocus } : CSS.textarea,
             value: draft,
@@ -675,10 +679,6 @@ window.__ModuleLoader__.load({
       const paneStyle = {
         ...CSS.pane,
         ...(variant === 'V3' && !isFocus ? CSS.dim : null),
-        /* Activation: the host's own focus colour and width, drawn inside the pane.
-           The shipped composer removes its outline and paints no replacement, so
-           this is the only focus feedback a channel gets. */
-        ...(focused ? CSS.paneFocused : null),
       }
       const headStyle = isWaiting && variant === 'V2'
         ? { ...CSS.head, ...CSS.headWaitingV2 }
@@ -965,6 +965,15 @@ window.__ModuleLoader__.load({
       }
 
       return h('div', { style: CSS.root },
+        /* Activation for the SHIPPED composer (real content), which we cannot give a
+           class to. The host publishes stable hooks on its own markup
+           (`data-composer-seat` / `data-conversation-region="composer"`), so a scoped
+           rule reaches exactly the input area instead of ringing the whole pane.
+           Colour and width follow ui-theme's focus convention
+           (focus.css: 2px of --dsw-alias-state-business-primary). */
+        h('style', { key: 'mixer-focus-ring' },
+          '[data-mixer-pane] [data-composer-seat]:focus-within{'
+          + `outline:2px solid ${T.business};outline-offset:-2px}`),
         h(TopBar, {
           variant,
           channels: visible,
