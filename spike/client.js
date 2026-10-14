@@ -52,8 +52,8 @@ window.__ModuleLoader__.load({
     const PROTOTYPE = true
     const VARIANTS = ['V1', 'V2', 'V3']
     const VARIANT_NOTE = {
-      V1: 'V1 点标：只在等待的通道标题前加一个圆点与「等你」胶囊',
-      V2: 'V2 边缘强调（已选）：等待的通道左侧竖条 + 表面提亮 + 标题加重',
+      V1: 'V1 点标：等待的通道标题前一个圆点与「等你」胶囊',
+      V2: 'V2 边缘强调（已选）：等待的通道【仅】头部左侧一条竖条',
       V3: 'V3 主次分栏：等待的通道自动升为宽栏',
     }
 
@@ -66,6 +66,8 @@ window.__ModuleLoader__.load({
       fg: 'var(--dsw-alias-label-primary)',
       fg2: 'var(--dsw-alias-label-secondary)',
       warn: 'var(--dsw-alias-state-warn-primary)',
+      /* The host's focus colour (ui-theme focus.css falls back to this). */
+      business: 'var(--dsw-alias-state-business-primary)',
     }
     const SURFACE = 0
     const PILL = 999
@@ -185,13 +187,20 @@ window.__ModuleLoader__.load({
         overflowX: 'auto', overflowY: 'hidden',
       },
       pane: { display: 'flex', flexDirection: 'column', minWidth: 0, minHeight: 0, background: T.base, overflow: 'hidden' },
-      paneLifted: { background: T.l1 },
+      /* Activation ring, drawn inside the pane. Colour and width follow the host's
+         own focus convention (ui-theme focus.css: 2px of --dsw-alias-state-business-primary);
+         the shipped composer paints none of its own. */
+      paneFocused: {
+        outline: `2px solid ${T.business}`,
+        outlineOffset: '-2px',
+      },
       dim: { opacity: 0.88 },
       head: {
         display: 'flex', alignItems: 'center', gap: 8, flex: '0 0 auto',
         padding: '4px 10px', borderBottom: `1px solid ${T.b1}`, font: `11px/1.7 ${MONO}`,
         whiteSpace: 'nowrap', overflow: 'hidden',
       },
+      /* V2's whole waiting signal: a warn stripe on the head row only. */
       headWaitingV2: { boxShadow: `inset 2px 0 0 0 ${T.warn}` },
       /* Breadcrumb: ancestors are plain text (this pane IS the destination), the
          last crumb carries the weight. */
@@ -639,16 +648,21 @@ window.__ModuleLoader__.load({
         : (pinned && pinnedView !== null ? pinnedView : viewList[0].id)
       const task = MOCK_TASKS[index % MOCK_TASKS.length]
       const crumbs = crumbsFor(summaries === undefined ? {} : summaries, sessionId)
-      /* One paint list, so the waiting stripe and the focus ring never fight. */
-      const shadows = []
-      if (isWaiting && variant === 'V2') shadows.push(`inset 2px 0 0 0 ${T.warn}`)
-      if (focused) shadows.push(`inset 0 0 0 1px ${T.b2}`)
+      /* V2 (the chosen variant) marks waiting with ONE thing: a warn stripe on the
+         head row. No surface lift, no bold title, no chip, and specifically no
+         stripe across the transcript. The wait type stays reachable as the head's
+         tooltip, which costs no pixels. */
       const paneStyle = {
         ...CSS.pane,
-        ...(isWaiting && variant === 'V2' ? CSS.paneLifted : null),
         ...(variant === 'V3' && !isFocus ? CSS.dim : null),
-        ...(shadows.length > 0 ? { boxShadow: shadows.join(', ') } : null),
+        /* Activation: the host's own focus colour and width, drawn inside the pane.
+           The shipped composer removes its outline and paints no replacement, so
+           this is the only focus feedback a channel gets. */
+        ...(focused ? CSS.paneFocused : null),
       }
+      const headStyle = isWaiting && variant === 'V2'
+        ? { ...CSS.head, ...CSS.headWaitingV2 }
+        : CSS.head
       const closeButton = h('button', {
         style: CSS.closeBtn,
         title: '从调音台移除（任务继续执行，仍在等你的话顶部条会提示）',
@@ -662,7 +676,11 @@ window.__ModuleLoader__.load({
         'data-mixer-waiting': isWaiting ? 'yes' : 'no',
         'data-mixer-focused': focused ? 'yes' : 'no',
       },
-        h('div', { style: isWaiting && variant === 'V2' ? { ...CSS.head, ...CSS.headWaitingV2 } : CSS.head, 'data-mixer-head': '' },
+        h('div', {
+          style: headStyle,
+          'data-mixer-head': '',
+          title: isWaiting ? (KIND_LABEL[waitingKind] || '等待你处理') : undefined,
+        },
           /* Running first: the user asked for the spinner ahead of the breadcrumb. */
           running === true
             ? h('span', {
@@ -682,8 +700,9 @@ window.__ModuleLoader__.load({
                 title: crumb.title,
               }, crumb.title),
             ))),
+          /* V1 keeps its point + chip; V2 is stripe-only; V3 relies on the column. */
           isWaiting && variant === 'V1' ? h('span', { style: CSS.dot }) : null,
-          isWaiting && variant !== 'V3'
+          isWaiting && variant === 'V1'
             ? h(WaitingChip, { kind: waitingKind, simulated: simulatedWaiting, compact: true })
             : null,
           h('span', { style: { flex: 1 } }),
