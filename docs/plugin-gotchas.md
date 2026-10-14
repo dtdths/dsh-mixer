@@ -60,3 +60,21 @@ node spike/boot-check.mjs
 
 - 侧边栏**无法归零**：折叠后仍是 56px 轨道（`packages/client/ui-layout/src/client/columns.ts:19,52-53`）。
 - 「等待用户」信号只对**已 retain** 的会话产生（`packages/client/ui-session/src/client/index.ts:59-71`）。
+
+## 4. 复用共享 UI：手写模块怎么 import 别的包
+
+不想重画宿主已有的组件（例如那个"会话在跑"的 loading）时，正路是复用 **共享 primitives**，而不是照着截图仿：
+
+1. 目标组件确实在共享包里 —— 例如 `StateDot` 导出自 `@deepseek-ai/dsh-client-ui-primitives`（`src/StateDot.tsx`），`state: 'ongoing'` 就是左侧栏会话行的 loading，且它**自带** `prefers-reduced-motion` 处理与相位对齐。
+2. 在 `package.json` 里声明 **`dsh.client.external`**：
+
+   ```json
+   "dsh": { "client": { "external": ["@deepseek-ai/dsh-client-ui-primitives"] } }
+   ```
+
+   这是模块表的依赖声明（"an `external` specifier is either the package row it names"）。**不要**把自己的包写进去（`packages/client/modules/src/index.ts:517-522` 会报错）。注意 `inject`（插件激活顺序）与 `external`（模块可用性）是**两个不同的字段**，按需分别声明。
+3. 在 factory 里 `require('@deepseek-ai/dsh-client-ui-primitives')`。
+
+**红线**：这个 `require` 必须 try/catch 兜底。模块表解析不到时未捕获的异常会在 factory 里抛出 → 条目 FAILED → 整个 Web 启动失败（与第 1 条同类后果）。降级渲染也要能看。
+
+**反例（别做）**：不要为了摆一个控件去读别的插件的 DOM、样式表或组件源码来估位置；要么走槽位，要么走共享 primitives。
