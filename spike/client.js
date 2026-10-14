@@ -229,6 +229,12 @@ window.__ModuleLoader__.load({
         margin: 12, padding: '10px 12px', border: `1px solid ${T.b2}`, background: T.l1,
         font: `11.5px/1.7 ${SANS}`, color: T.fg,
       },
+      diagLine: {
+        flex: '0 0 auto', padding: '3px 10px', color: T.fg2, background: T.l1,
+        borderBottom: `1px solid ${T.b1}`, font: `10.5px/1.7 ${MONO}`,
+        whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+      },
+      viewBody: { flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' },
       empty: {
         flex: 1, display: 'flex', flexDirection: 'column', gap: 8,
         alignItems: 'center', justifyContent: 'center', padding: 32, textAlign: 'center', font: `13px/1.8 ${SANS}`,
@@ -373,7 +379,22 @@ window.__ModuleLoader__.load({
       const viewId = view !== undefined && view !== null
         ? view
         : (active === undefined ? undefined : active.id)
+      /* Render first, then report: the diagnostic below is the whole point of this
+         round, since the pane shows a composer but no transcript. */
+      const produced = viewId === undefined
+        ? null
+        : renderSlot('conversation.view', {
+            inspectCall,
+            viewRequest,
+            openView,
+            completeViewRequest: actions.completeViewRequest,
+          }, { only: viewId })
+      const tabIds = tabs === undefined ? 'undefined'
+        : tabs.length === 0 ? 'empty'
+          : tabs.map(tab => tab.id).join(',')
       return h('div', { style: CSS.viewArea, 'data-mixer-views': '' },
+        h('div', { style: CSS.diagLine, 'data-mixer-view-diagnostic': '' },
+          `视图诊断 tabs=[${tabIds}] viewId=${String(viewId)} produced=${produced === null || produced === undefined ? 'no' : 'yes'}`),
         tabs !== undefined && tabs.length > 1
           ? h('div', { style: CSS.viewTabs, 'data-mixer-view-tabs': '' },
               tabs.map(tab => h('button', {
@@ -383,29 +404,28 @@ window.__ModuleLoader__.load({
                 onClick: () => actions.setView(tab.id),
               }, tab.label)))
           : null,
-        viewId === undefined
-          ? null
-          : renderSlot('conversation.view', {
-              inspectCall,
-              viewRequest,
-              openView,
-              completeViewRequest: actions.completeViewRequest,
-            }, { only: viewId }),
+        h('div', { style: CSS.viewBody }, produced),
       )
     }
 
-    /** Real factory content; reports an empty render instead of showing nothing. */
+    /**
+     * Real factory content. Two modes, so the failing half can be isolated:
+     *   'default' - no `views` override at all, the shipped default component runs
+     *   'tabs'    - our MixerViews override, which adds the tab row and reports itself
+     */
     function RealConversation(props) {
-      const node = props.renderFactorySlot(
-        'conversation.content',
-        { variant: 'embedded', phase: 'active', hero: false },
-        { slots: { views: MixerViews } },
+      const { renderFactorySlot, mode, blank, running } = props
+      const input = { variant: 'embedded', phase: 'active', hero: false }
+      const node = mode === 'tabs'
+        ? renderFactorySlot('conversation.content', input, { slots: { views: MixerViews } })
+        : renderFactorySlot('conversation.content', input)
+      return h('div', { style: { flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' } },
+        h('div', { style: CSS.diagLine, 'data-mixer-real-mode': mode },
+          `${mode === 'tabs' ? '真实·标签行' : '真实·默认'} · session.blank=${String(blank)} running=${String(running)}`),
+        node === null || node === undefined
+          ? h('div', { style: CSS.diag }, '真实内容未产出：工厂返回了空。请把这行抄给 agent。')
+          : node,
       )
-      if (node === null || node === undefined) {
-        return h('div', { style: CSS.diag },
-          '真实内容未产出：conversation.content 工厂这次返回了空。请把这条结果告诉 agent。')
-      }
-      return h('div', { style: { flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' } }, node)
     }
 
     /* ---------- unified top bar ---------- */
@@ -635,7 +655,12 @@ window.__ModuleLoader__.load({
                     waitingKind,
                     simulatedWaiting,
                   }))
-            : h(RealConversation, { renderFactorySlot }),
+            : h(RealConversation, {
+                renderFactorySlot,
+                mode: contentMode === 'real-tabs' ? 'tabs' : 'default',
+                blank: summary === undefined ? undefined : summary.blank,
+                running: summary === undefined ? undefined : summary.running,
+              }),
         ),
       )
     }
@@ -683,14 +708,13 @@ window.__ModuleLoader__.load({
         h('span', { style: CSS.protoLabel }, `${variant} (${VARIANTS.indexOf(variant) + 1}/${VARIANTS.length})`),
         h('button', { style: CSS.protoArrow, onClick: () => cycle(1), 'aria-label': '下一个变体' }, '→'),
         h('span', { style: CSS.protoSeg },
-          h('button', {
-            style: contentMode === 'mock' ? { ...CSS.ghostBtn, ...CSS.protoSegOn } : CSS.ghostBtn,
-            onClick: () => onContentMode('mock'),
-          }, '模拟内容'),
-          h('button', {
-            style: contentMode === 'real' ? { ...CSS.ghostBtn, ...CSS.protoSegOn } : CSS.ghostBtn,
-            onClick: () => onContentMode('real'),
-          }, '真实内容')),
+          [['mock', '模拟'], ['real-default', '真实·默认'], ['real-tabs', '真实·标签行']].map(([id, label]) =>
+            h('button', {
+              key: id,
+              style: contentMode === id ? { ...CSS.ghostBtn, ...CSS.protoSegOn } : CSS.ghostBtn,
+              'data-mixer-content-mode': id,
+              onClick: () => onContentMode(id),
+            }, label))),
         h('label', { style: CSS.protoToggle },
           h('input', { type: 'checkbox', checked: forced, onChange: event => onForced(event.target.checked) }),
           '模拟等待态'),
