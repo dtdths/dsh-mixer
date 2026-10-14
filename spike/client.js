@@ -742,16 +742,24 @@ window.__ModuleLoader__.load({
         }, MixerPanel))
 
         /* `/mixer`: a Client-owned slash command (ui-commands contract), so the
-           view is reachable from any composer without touching the header. */
-        if (ctx.commandUi !== undefined) {
-          ctx.commandUi.register({
+           view is reachable from any composer without touching the header.
+
+           MUST go through `ctx.inject`, never `if (ctx.commandUi)`: in Cordis a
+           read of a not-yet-provided service THROWS ("cannot get property
+           \"commandUi\" without inject"), it does not return undefined. This
+           plugin does not inject ui-commands, so on a cold boot `apply` runs
+           before `commandUi` exists and that read failed the whole entry
+           (web boot: dsh-mixer-spike: failed). `ctx.inject` waits for the
+           service instead, and simply never fires when it never arrives. */
+        ctx.inject(['commandUi'], (scope) => {
+          scope.commandUi.register({
             name: 'mixer',
             label: () => '调音台视图',
             description: () => '把所有关注的会话并排放在一屏里',
             available: () => true,
             ui: { kind: 'action', run: () => ctx.layout.selectPanel(PANEL_ID) },
           })
-        }
+        })
       },
     }
   },
