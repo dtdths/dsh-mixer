@@ -1,0 +1,35 @@
+{
+  "name": "dsh-mixer",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "调音台视图：一屏横向并列多个独立会话（各自输入框与对话记录），等待决策/授权的通道即时亮灯。",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/dtdths/dsh-mixer.git"
+  },
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "cordis.patch.yml",
+    "locale/*.json",
+    "icon.svg"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": []
+    }
+  }
+}

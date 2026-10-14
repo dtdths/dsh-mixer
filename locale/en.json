@@ -1,0 +1,14 @@
+{
+  "meta": {
+    "title": "Mixer",
+    "description": "A multi-session mixer view: several independent conversations side by side, each with its own composer, with the channels waiting on a decision or permission request lit up."
+  },
+  "view": {
+    "enter": "Mixer view",
+    "exit": "Regular view"
+  },
+  "channel": {
+    "empty": "No conversation in this channel",
+    "waiting": "Waiting on you"
+  }
+}
