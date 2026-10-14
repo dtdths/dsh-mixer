@@ -78,3 +78,23 @@ node spike/boot-check.mjs
 **红线**：这个 `require` 必须 try/catch 兜底。模块表解析不到时未捕获的异常会在 factory 里抛出 → 条目 FAILED → 整个 Web 启动失败（与第 1 条同类后果）。降级渲染也要能看。
 
 **反例（别做）**：不要为了摆一个控件去读别的插件的 DOM、样式表或组件源码来估位置；要么走槽位，要么走共享 primitives。
+
+## 5. 给宿主已有控件加样式：找它打在标记上的稳定钩子
+
+真实内容里那些官方控件拿不到 class 时，别去用 CSS module 的哈希类名（`GrXCZa_card` 这种 —— DSH 一重建/升级就失效）。宿主在关键元素上打了 **`data-*` 钩子**，优先用它们，并用本插件自己的属性做作用域前缀：
+
+```css
+[data-mixer-pane] [data-composer-card]:focus-within { outline: … }
+```
+
+composer 区域的三层钩子，按"越贴目标越好"取用：
+
+| 钩子 | 是什么 |
+| --- | --- |
+| `data-composer-card` | **输入卡片本身**（带 `border-radius: --dsw-radius-panel`）—— 要圈"输入框"就用它 |
+| `data-composer-seat` | 包住整条 composer 带的座位（输入 + 工具栏 + dock，无圆角）—— 圈它会是个难看的大方框 |
+| `data-conversation-region="composer"` | 与 seat 同一个元素 |
+
+**搜索陷阱**：这些钩子可能是**无值属性**（`data-composer-card` 后面没有 `=…`），用 `data-[a-z-]*=` 这种正则去 grep 会**全部漏掉**。查宿主钩子时要同时搜 `data-[a-z-]*\b`（无值）与 `data-[a-z-]*=`（有值）。这个坑让我一开始误以为"输入卡片没有稳定属性"，差点退回哈希类名。
+
+**取用原则**：钩子越外层，圈出来的框越大、越不像用户眼里的那个控件。先在浏览器里看一眼要圈的到底是哪一层，再选钩子。

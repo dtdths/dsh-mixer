@@ -966,14 +966,18 @@ window.__ModuleLoader__.load({
 
       return h('div', { style: CSS.root },
         /* Activation for the SHIPPED composer (real content), which we cannot give a
-           class to. The host publishes stable hooks on its own markup
-           (`data-composer-seat` / `data-conversation-region="composer"`), so a scoped
-           rule reaches exactly the input area instead of ringing the whole pane.
+           class to. The host publishes stable hooks on its own markup, so a scoped
+           rule reaches the input card itself:
+             - `data-composer-card`  the input card (border-radius: --dsw-radius-panel)
+             - `data-composer-seat`  the wider composer band that wraps it
+           Ring the CARD, not the seat: the seat spans the whole composer band
+           (input + toolbar + docks) with no radius, which reads as a big ugly box.
            Colour and width follow ui-theme's focus convention
-           (focus.css: 2px of --dsw-alias-state-business-primary). */
+           (focus.css: 2px of --dsw-alias-state-business-primary); offset 0 makes the
+           ring hug the card's own rounded border. */
         h('style', { key: 'mixer-focus-ring' },
-          '[data-mixer-pane] [data-composer-seat]:focus-within{'
-          + `outline:2px solid ${T.business};outline-offset:-2px}`),
+          '[data-mixer-pane] [data-composer-card]:focus-within{'
+          + `outline:2px solid ${T.business};outline-offset:0}`),
         h(TopBar, {
           variant,
           channels: visible,
