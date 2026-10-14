@@ -165,18 +165,6 @@ window.__ModuleLoader__.load({
         border: `1px solid ${T.b1}`, color: T.fg2, font: `11px/1 ${MONO}`, padding: 0,
       },
       body: { flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' },
-      /* Real-content view seam: the tab row replaces the shipped header's view nav. */
-      viewArea: { flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' },
-      viewTabs: {
-        display: 'flex', alignItems: 'center', gap: 2, flex: '0 0 auto',
-        padding: '0 10px', borderBottom: `1px solid ${T.b1}`,
-      },
-      viewTab: {
-        font: `11.5px/1.6 ${SANS}`, padding: '5px 9px', cursor: 'pointer', borderRadius: 0,
-        color: T.fg2, background: 'transparent', border: 'none',
-        borderBottom: '2px solid transparent',
-      },
-      viewTabOn: { color: T.fg, fontWeight: 600, borderBottom: `2px solid ${T.b2}` },
       /* Mock-only chrome stand-in, so the pane layout can be judged while the
          shipped header stays unmountable (see docs/plugin-gotchas.md). */
       mockChrome: {
@@ -234,7 +222,6 @@ window.__ModuleLoader__.load({
         borderBottom: `1px solid ${T.b1}`, font: `10.5px/1.7 ${MONO}`,
         whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
       },
-      viewBody: { flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' },
       empty: {
         flex: 1, display: 'flex', flexDirection: 'column', gap: 8,
         alignItems: 'center', justifyContent: 'center', padding: 32, textAlign: 'center', font: `13px/1.8 ${SANS}`,
@@ -350,81 +337,71 @@ window.__ModuleLoader__.load({
       )
     }
 
-    /** Mirror of the shipped `resolveActiveView`: preferred view, then Chat. */
-    function resolveActiveView(tabs, selectedId) {
-      const selected = selectedId === null || selectedId === undefined
-        ? undefined
-        : tabs.find(tab => tab.id === selectedId)
-      return selected !== undefined ? selected : tabs.find(tab => tab.id === 'chat')
-    }
-
     /**
      * Local component for the `conversation.content` factory's `views` seam.
      *
-     * Mirrors the shipped DefaultConversationViews (which this replaces) and adds
-     * the view tab row that the shipped session header would have rendered. The
-     * seam hands this component the `conversation.session` slot props, so its
-     * `renderSlot` is bound to THAT entry's children: `conversation.view` is
-     * renderable, `conversation.session` is NOT. Calling an undeclared key throws
-     * during render and blanks the pane, which is what the first round's
-     * `FixedChatViews` did by mirroring the ui-subagent snippet out of context.
+     * The shipped default is `ConversationSessionView`, which renders the factory
+     * child `conversation.session` (`ConversationContent.tsx`:
+     * `useFactorySlot('views', ConversationSessionView)`). So the seam's
+     * `renderSlot` is bound to the FACTORY's children: `conversation.session` is
+     * renderable, `conversation.view` is NOT (that key belongs to
+     * `conversation.session`'s own registration). The round-5 override called the
+     * undeclared key, the call threw, the occurrence unmounted, and the pane lost
+     * the transcript together with our diagnostic line. This mirrors the shipped
+     * default instead.
+     *
+     * Consequence recorded on ticket #11: the view TAB ROW cannot be built here at
+     * all. `useConversationViews` / the conversation store live on the
+     * `conversation.session` slot props, which this seam does not receive.
      */
-    function MixerViews(props) {
-      const { useConversationViews, useStore, actions, renderSlot, openView, useInspectCall, view } = props
-      const tabs = useConversationViews(value => value)
-      const selectedId = useStore(state => state.view)
-      const viewRequest = useStore(state => state.viewRequest ?? null)
-      const inspectCall = useInspectCall(value => value)
-      const active = resolveActiveView(tabs, selectedId)
-      const viewId = view !== undefined && view !== null
-        ? view
-        : (active === undefined ? undefined : active.id)
-      /* Render first, then report: the diagnostic below is the whole point of this
-         round, since the pane shows a composer but no transcript. */
-      const produced = viewId === undefined
-        ? null
-        : renderSlot('conversation.view', {
-            inspectCall,
-            viewRequest,
-            openView,
-            completeViewRequest: actions.completeViewRequest,
-          }, { only: viewId })
-      const tabIds = tabs === undefined ? 'undefined'
-        : tabs.length === 0 ? 'empty'
-          : tabs.map(tab => tab.id).join(',')
-      return h('div', { style: CSS.viewArea, 'data-mixer-views': '' },
-        h('div', { style: CSS.diagLine, 'data-mixer-view-diagnostic': '' },
-          `视图诊断 tabs=[${tabIds}] viewId=${String(viewId)} produced=${produced === null || produced === undefined ? 'no' : 'yes'}`),
-        tabs !== undefined && tabs.length > 1
-          ? h('div', { style: CSS.viewTabs, 'data-mixer-view-tabs': '' },
-              tabs.map(tab => h('button', {
-                key: tab.id,
-                style: tab.id === viewId ? { ...CSS.viewTab, ...CSS.viewTabOn } : CSS.viewTab,
-                'data-mixer-view': tab.id,
-                onClick: () => actions.setView(tab.id),
-              }, tab.label)))
-          : null,
-        h('div', { style: CSS.viewBody }, produced),
-      )
+    function PassThroughViews(props) {
+      return props.renderSlot('conversation.session', {})
     }
 
     /**
-     * Real factory content. Two modes, so the failing half can be isolated:
-     *   'default' - no `views` override at all, the shipped default component runs
-     *   'tabs'    - our MixerViews override, which adds the tab row and reports itself
+     * Real factory content, with a DOM probe.
+     *
+     * A blank pane has two very different causes and this line separates them:
+     *   h / scroll / content - heights of the host, the scrollport inside the
+     *     factory, and its scroll content; content > scroll means collapsed
+     *   nodes - element count under the host; 0 means the factory rendered no
+     *     elements at all, so it is not a layout problem
+     *   'default' - no `views` override, shipped default component runs
+     *   'passthrough' - our override renders `conversation.session`, as the default does
      */
     function RealConversation(props) {
       const { renderFactorySlot, mode, blank, running } = props
+      const [probe, setProbe] = useState(null)
+      const hostRef = useRef(null)
       const input = { variant: 'embedded', phase: 'active', hero: false }
-      const node = mode === 'tabs'
-        ? renderFactorySlot('conversation.content', input, { slots: { views: MixerViews } })
+      const node = mode === 'passthrough'
+        ? renderFactorySlot('conversation.content', input, { slots: { views: PassThroughViews } })
         : renderFactorySlot('conversation.content', input)
+      useEffect(() => {
+        const measure = () => {
+          const host = hostRef.current
+          if (host === null) return
+          const scroll = host.querySelector('[data-conversation-scroll]')
+          setProbe({
+            h: host.offsetHeight,
+            s: scroll === null ? -1 : scroll.offsetHeight,
+            c: scroll === null ? -1 : scroll.scrollHeight,
+            n: host.querySelectorAll('*').length,
+          })
+        }
+        measure()
+        const timers = [window.setTimeout(measure, 600), window.setTimeout(measure, 2000)]
+        return () => { timers.forEach(id => window.clearTimeout(id)) }
+      }, [])
+      const probeText = probe === null
+        ? '测量中'
+        : `h=${probe.h} scroll=${probe.s}/${probe.c} nodes=${probe.n}`
       return h('div', { style: { flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' } },
         h('div', { style: CSS.diagLine, 'data-mixer-real-mode': mode },
-          `${mode === 'tabs' ? '真实·标签行' : '真实·默认'} · session.blank=${String(blank)} running=${String(running)}`),
+          `${mode === 'passthrough' ? '真实·直通' : '真实·默认'} · blank=${String(blank)} running=${String(running)} · ${probeText}`),
         node === null || node === undefined
           ? h('div', { style: CSS.diag }, '真实内容未产出：工厂返回了空。请把这行抄给 agent。')
-          : node,
+          : h('div', { ref: hostRef, style: { flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' } }, node),
       )
     }
 
@@ -657,7 +634,7 @@ window.__ModuleLoader__.load({
                   }))
             : h(RealConversation, {
                 renderFactorySlot,
-                mode: contentMode === 'real-tabs' ? 'tabs' : 'default',
+                mode: contentMode === 'real-passthrough' ? 'passthrough' : 'default',
                 blank: summary === undefined ? undefined : summary.blank,
                 running: summary === undefined ? undefined : summary.running,
               }),
@@ -708,7 +685,7 @@ window.__ModuleLoader__.load({
         h('span', { style: CSS.protoLabel }, `${variant} (${VARIANTS.indexOf(variant) + 1}/${VARIANTS.length})`),
         h('button', { style: CSS.protoArrow, onClick: () => cycle(1), 'aria-label': '下一个变体' }, '→'),
         h('span', { style: CSS.protoSeg },
-          [['mock', '模拟'], ['real-default', '真实·默认'], ['real-tabs', '真实·标签行']].map(([id, label]) =>
+          [['mock', '模拟'], ['real-default', '真实·默认'], ['real-passthrough', '真实·直通']].map(([id, label]) =>
             h('button', {
               key: id,
               style: contentMode === id ? { ...CSS.ghostBtn, ...CSS.protoSegOn } : CSS.ghostBtn,
