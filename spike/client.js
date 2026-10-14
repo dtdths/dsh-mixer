@@ -36,7 +36,7 @@ window.__ModuleLoader__.load({
   factory(require) {
     const React = require('react')
     const h = React.createElement
-    const { useState, useEffect, useCallback, useRef } = React
+    const { useState, useEffect, useCallback, useMemo, useRef } = React
 
     const PANEL_ID = 'mixer'
     /** Our own Session reference source; never `mainView` (see docs/adr/0001). */
@@ -165,6 +165,19 @@ window.__ModuleLoader__.load({
         border: `1px solid ${T.b1}`, color: T.fg2, font: `11px/1 ${MONO}`, padding: 0,
       },
       body: { flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' },
+      /* Real view tabs: ours, because the shipped header's view navigation is not
+         mountable per pane. Switching re-renders with the view pinned, which the
+         strict Session body honours (`viewId = view ?? active?.id`). */
+      viewTabs: {
+        display: 'flex', alignItems: 'center', gap: 2, flex: '0 0 auto',
+        padding: '0 10px', borderBottom: `1px solid ${T.b1}`,
+      },
+      viewTab: {
+        font: `11.5px/1.6 ${SANS}`, padding: '5px 9px', cursor: 'pointer', borderRadius: 0,
+        color: T.fg2, background: 'transparent', border: 'none',
+        borderBottom: '2px solid transparent',
+      },
+      viewTabOn: { color: T.fg, fontWeight: 600, borderBottom: `2px solid ${T.b2}` },
       /* Mock-only chrome stand-in, so the pane layout can be judged while the
          shipped header stays unmountable (see docs/plugin-gotchas.md). */
       mockChrome: {
@@ -350,10 +363,17 @@ window.__ModuleLoader__.load({
      * the transcript together with our diagnostic line. This mirrors the shipped
      * default instead.
      *
-     * Consequence recorded on ticket #11: the view TAB ROW cannot be built here at
-     * all. `useConversationViews` / the conversation store live on the
-     * `conversation.session` slot props, which this seam does not receive.
+     * `pinnedView` is the plugin-side substitute for writing the conversation
+     * store: the strict Session body resolves `view ?? active?.id`, so pinning the
+     * view here switches tabs without touching another entry's store.
      */
+    function makeViews(pinnedView) {
+      return function PinnedViews(props) {
+        return props.renderSlot('conversation.session', pinnedView === null ? {} : { view: pinnedView })
+      }
+    }
+
+    /** The shipped default views component, used when we are not pinning anything. */
     function PassThroughViews(props) {
       return props.renderSlot('conversation.session', {})
     }
@@ -370,13 +390,13 @@ window.__ModuleLoader__.load({
      *   'passthrough' - our override renders `conversation.session`, as the default does
      */
     function RealConversation(props) {
-      const { renderFactorySlot, mode, blank, running } = props
+      const { renderFactorySlot, mode, blank, running, viewsComponent } = props
       const [probe, setProbe] = useState(null)
       const hostRef = useRef(null)
       const input = { variant: 'embedded', phase: 'active', hero: false }
-      const node = mode === 'passthrough'
-        ? renderFactorySlot('conversation.content', input, { slots: { views: PassThroughViews } })
-        : renderFactorySlot('conversation.content', input)
+      const node = viewsComponent === undefined || viewsComponent === null
+        ? renderFactorySlot('conversation.content', input)
+        : renderFactorySlot('conversation.content', input, { slots: { views: viewsComponent } })
       useEffect(() => {
         const measure = () => {
           const host = hostRef.current
@@ -398,7 +418,7 @@ window.__ModuleLoader__.load({
         : `h=${probe.h} scroll=${probe.s}/${probe.c} nodes=${probe.n}`
       return h('div', { style: { flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' } },
         h('div', { style: CSS.diagLine, 'data-mixer-real-mode': mode },
-          `${mode === 'passthrough' ? '真实·直通' : '真实·默认'} · blank=${String(blank)} running=${String(running)} · ${probeText}`),
+          `${mode === 'pinned' ? '真实·标签' : '真实·默认'} · blank=${String(blank)} running=${String(running)} · ${probeText}`),
         node === null || node === undefined
           ? h('div', { style: CSS.diag }, '真实内容未产出：工厂返回了空。请把这行抄给 agent。')
           : h('div', { ref: hostRef, style: { flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' } }, node),
@@ -547,11 +567,21 @@ window.__ModuleLoader__.load({
     }
 
     function Pane(props) {
-      const { variant, sessionId, summary, waiting, waitingKind, simulatedWaiting, isFocus, index, contentMode, onClose, renderFactorySlot } = props
+      const { variant, sessionId, summary, waiting, waitingKind, simulatedWaiting, isFocus, index, contentMode, views, onClose, renderFactorySlot } = props
       const isWaiting = waiting !== undefined
       const title = summary === undefined ? sessionId : summary.displayTitle
       const [mockTab, setMockTab] = useState('chat')
+      /* null = follow the Session's own stored view. A string pins the view by
+         re-rendering the strict body with it, which is the plugin-side substitute
+         for writing another entry's conversation store. */
+      const [pinnedView, setPinnedView] = useState(null)
+      const viewsComponent = useMemo(() => makeViews(pinnedView), [pinnedView])
+      const viewList = views !== undefined && views.length > 0
+        ? views
+        : [{ id: 'chat', label: '对话' }, { id: 'trajectory', label: '轨迹' }]
+      const activeViewId = pinnedView === null ? viewList[0].id : pinnedView
       const mock = contentMode === 'mock'
+      const pinned = contentMode === 'real-pinned'
       const task = MOCK_TASKS[index % MOCK_TASKS.length]
       const paneStyle = {
         ...CSS.pane,
@@ -602,16 +632,30 @@ window.__ModuleLoader__.load({
                 onClick: () => setMockTab('trajectory'),
               }, '轨迹'),
             ))
-        : h('div', { style: isWaiting && variant === 'V2' ? { ...CSS.head, ...CSS.headWaitingV2 } : CSS.head },
-            isWaiting && variant === 'V1' ? h('span', { style: CSS.dot }) : null,
-            h('span', { style: { ...CSS.headTitle, ...(isWaiting && variant !== 'V3' ? CSS.headStrong : null) } }, title),
-            isWaiting && variant !== 'V3'
-              ? h(WaitingChip, { kind: waitingKind, simulated: simulatedWaiting, compact: true })
-              : null,
-            h('span', { style: { flex: 1 } }),
-            h('span', { style: CSS.chip, title: '真实模式：会话头由 ui-conversation 独占声明，插件无法在此挂载（见 docs/plugin-gotchas.md）' }, '精简头'),
-            summary !== undefined && summary.running ? h('span', { style: CSS.chip }, '运行中') : null,
-            closeButton,
+        : h(React.Fragment, null,
+            h('div', { style: isWaiting && variant === 'V2' ? { ...CSS.head, ...CSS.headWaitingV2 } : CSS.head },
+              isWaiting && variant === 'V1' ? h('span', { style: CSS.dot }) : null,
+              h('span', { style: { ...CSS.headTitle, ...(isWaiting && variant !== 'V3' ? CSS.headStrong : null) } }, title),
+              isWaiting && variant !== 'V3'
+                ? h(WaitingChip, { kind: waitingKind, simulated: simulatedWaiting, compact: true })
+                : null,
+              h('span', { style: { flex: 1 } }),
+              h('span', {
+                style: CSS.chip,
+                title: pinned
+                  ? '真实·标签：这里的标签是插件自己实现的，点击即切换本格视图'
+                  : '真实·默认：视图由会话自身记忆决定（本档不接管）',
+              }, pinned ? '真实·标签' : '真实·默认'),
+              summary !== undefined && summary.running ? h('span', { style: CSS.chip }, '运行中') : null,
+              closeButton,
+            ),
+            h('div', { style: CSS.viewTabs, 'data-mixer-view-tabs': '' },
+              viewList.map(view => h('button', {
+                key: view.id,
+                style: view.id === activeViewId ? { ...CSS.viewTab, ...CSS.viewTabOn } : CSS.viewTab,
+                'data-mixer-view': view.id,
+                onClick: () => setPinnedView(view.id),
+              }, view.label))),
           )
 
       return h('div', {
@@ -634,7 +678,8 @@ window.__ModuleLoader__.load({
                   }))
             : h(RealConversation, {
                 renderFactorySlot,
-                mode: contentMode === 'real-passthrough' ? 'passthrough' : 'default',
+                mode: pinned ? 'pinned' : 'default',
+                viewsComponent: pinned ? viewsComponent : undefined,
                 blank: summary === undefined ? undefined : summary.blank,
                 running: summary === undefined ? undefined : summary.running,
               }),
@@ -643,7 +688,7 @@ window.__ModuleLoader__.load({
     }
 
     function Grid(props) {
-      const { variant, ids, summaries, attention, focusId, SessionProvider, refFor, contentMode, onClose, renderFactorySlot } = props
+      const { variant, ids, summaries, attention, focusId, SessionProvider, refFor, contentMode, views, onClose, renderFactorySlot } = props
       const columns = ids.map(id => (variant === 'V3' && id === focusId ? '2.2fr' : '1fr')).join(' ')
       return h('div', { style: { ...CSS.grid, gridTemplateColumns: columns } },
         ids.map((id, index) => h(SessionProvider, { key: id, session: refFor(id) },
@@ -657,6 +702,7 @@ window.__ModuleLoader__.load({
             simulatedWaiting: attention[id] === undefined ? undefined : attention[id].simulated,
             isFocus: id === focusId,
             contentMode,
+            views,
             onClose,
             renderFactorySlot,
           }))))
@@ -685,7 +731,7 @@ window.__ModuleLoader__.load({
         h('span', { style: CSS.protoLabel }, `${variant} (${VARIANTS.indexOf(variant) + 1}/${VARIANTS.length})`),
         h('button', { style: CSS.protoArrow, onClick: () => cycle(1), 'aria-label': '下一个变体' }, '→'),
         h('span', { style: CSS.protoSeg },
-          [['mock', '模拟'], ['real-default', '真实·默认'], ['real-passthrough', '真实·直通']].map(([id, label]) =>
+          [['mock', '模拟'], ['real-default', '真实·默认'], ['real-pinned', '真实·标签']].map(([id, label]) =>
             h('button', {
               key: id,
               style: contentMode === id ? { ...CSS.ghostBtn, ...CSS.protoSegOn } : CSS.ghostBtn,
@@ -702,7 +748,7 @@ window.__ModuleLoader__.load({
     function MixerPanel(props) {
       const {
         useSessions, useSessionStatus, useWorkspaces, SessionProvider, renderFactorySlot, refFor,
-        backToConversation, startSession, openWorkspace, collapseSidebar, restoreSidebar,
+        backToConversation, startSession, openWorkspace, collapseSidebar, restoreSidebar, listViews,
       } = props
       const [variant, setVariant] = useState('V2')
       const [forced, setForced] = useState(true)
@@ -716,6 +762,10 @@ window.__ModuleLoader__.load({
       const workspaceState = useWorkspaces(state => state)
       const summaries = list && list.byId ? list.byId : {}
       const workspaces = workspaceState && workspaceState.items ? workspaceState.items : []
+      /* Registered conversation views, read straight off the slot registry: the
+         plugin can build the tab row even though the store that selects one is
+         out of reach. */
+      const views = typeof listViews === 'function' ? listViews() : []
 
       /* Hide the sidebar for the duration of the mixer view; the host cannot go
          below its 56px collapsed rail, so the rail stays. */
@@ -798,7 +848,7 @@ window.__ModuleLoader__.load({
                 '用顶栏的工作区下拉勾选要关注的会话，只有勾中的会话会在这里列出。移除的会话不会停止，仍在等你的话顶栏会提示。'))
           : h(Grid, {
               variant, ids: visible, summaries, attention, focusId: effectiveFocus,
-              SessionProvider, refFor, contentMode, onClose: closeChannel, renderFactorySlot,
+              SessionProvider, refFor, contentMode, views, onClose: closeChannel, renderFactorySlot,
             }),
         PROTOTYPE
           ? h(ProtoBar, {
@@ -874,6 +924,22 @@ window.__ModuleLoader__.load({
             openWorkspace: (workspaceId) => ctx.uiWorkspace.openWorkspace(workspaceId),
             collapseSidebar,
             restoreSidebar,
+            /* Read the registered conversation views for the tab row. Guarded
+               because `entries` is not part of the catalogued service face, even
+               though shipped plugins (ui-settings-general) call it. */
+            listViews: () => {
+              try {
+                return ctx.slots.entries('conversation.view').map(entry => ({
+                  id: entry.options.id,
+                  label: typeof entry.options.label === 'function'
+                    ? entry.options.label()
+                    : (entry.options.label === undefined ? entry.options.id : entry.options.label),
+                }))
+              } catch (error) {
+                console.error('[mixer-proto] conversation.view entries unavailable', error)
+                return []
+              }
+            },
           }),
         }, MixerPanel))
 
