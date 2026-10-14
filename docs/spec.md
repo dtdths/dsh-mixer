@@ -194,8 +194,19 @@ renderFactorySlot('conversation.content', input, { slots: { views: Views } })
 
 ### 5.4 布局与溢出
 
-- 每格固定最小宽度 **380px**；列用 `minmax(380px, 1fr)`（聚焦格 `2.2fr`），网格容器 `overflow-x: auto`。
+- 每格固定最小宽度 **380px**。通道行用 **flex 轨道**（不是 grid，因为分界线要能拖），单元格 `min-width: 380px`、`flex: <权重> 1 0`。
 - **不设格数硬上限**：超出可视宽度就横向滚动，而不是挤窄每格。
+- **分界线可拖拽调宽**（用户要求）：N 个通道之间有 **N−1 条 5px 抓取带**，中间画 1px 细线（悬停/拖动时变 `state-business-primary`）。
+
+  实现要点：
+  - 宽度以**每通道权重**保存（session 键控，缺省 1），拖拽只调整相邻两格；
+  - 拖拽是**按比例**的：`dW = (dx / 内容宽) × 总权重`，且在 `pointerdown` 时快照基准，避免重渲染让分界线追着指针跑；
+  - **必须夹紧**：任一侧都不得低于 `MIN_PANE_W`，即 `floor = 总权重 × (380 / 内容宽)`；
+  - 抓取带上加 `touch-action: none`，拖动期间给 `body` 设 `user-select: none`（否则会选中对话文字）；
+  - 用 `setPointerCapture`，`pointerup` / `pointercancel` 都要收尾并恢复 `user-select`。
+
+  ⚠️ 手工调宽与"最小宽 + 横向滚动"是**互补**的：调宽改的是相对比例，总宽超出时仍然横向滚动。
+  ⚠️ 目前宽度只存在内存里，**未持久化**（通道集合的持久化见 §4.1）；要不要记住宽度待定。
 
 ### 5.5 视觉纪律
 
@@ -242,6 +253,18 @@ renderFactorySlot('conversation.content', input, { slots: { views: Views } })
 - **冷启动 ≠ 热重载**：HMR 重载时所有服务都已就位，带 bug 的代码看起来完全正常。任何 `apply()` 改动都要走冷启动验证（`node spike/boot-check.mjs` + 硬刷新）。
 - 注册 slot 前确认该键在父条目的 `children` 里被声明过；渲染未声明的键同样抛错。
 - 不修改别的条目的 store（本次因此改用"钉住视图"而非写 conversation store）。
+
+## 8.5 已知的宿主行为：轮次导航（对话右侧的竖排标记）
+
+它**不是插件要补的东西**，也不需要"每格单独加" —— 轮次导航由 `ui-chat` 的 `ChatView` 自己渲染，属于**每个视图实例**，所以每格天然各有一份。
+
+排查"格子里看不到它"时，按这三条依次核对（都已确证）：
+
+1. **轮数门槛**：`TurnNavigator.tsx:227` 有 `if (items.length < 2) return null` —— 少于 2 个轮次**根本不渲染**。同一个会话在原版能看到、在格子里看不到，就不可能是这条（数据相同）。
+2. **视图类型**：它是 **chat 视图**的一部分。若该格停在 `轨迹` 视图，就没有它。
+3. **高度来源**：`.frame` 的高度是 `--turn-rail-band: calc(var(--dsh-conversation-viewport-height) - var(--dsh-composer-height))`，这两个变量由 `ConversationContent` 的 `ResizeObserver` 发布在滚动容器 `[data-conversation-scroll]` 上。变量缺失时会走 fallback（`100dvh - 152px`），通常仍可见；但若 `--dsh-conversation-viewport-height` 被写成 0，rail 就会塌成不可见。
+
+原型里为此加了 DOM 探针，真实模式下每格诊断行会打印：`轮次导航 rail=<rail 框架数> 标记=<data-index 元素数> band=<视口高> - composer=<输入区高>`。**rail=0 且标记=0** 指向第 1 条；**band=0** 指向第 3 条。
 
 ## 9. 未决 / 后续
 

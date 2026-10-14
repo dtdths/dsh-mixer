@@ -199,13 +199,27 @@ window.__ModuleLoader__.load({
       ddSub: { padding: '2px 8px 6px 26px', display: 'flex', flexDirection: 'column', gap: 2, borderLeft: `1px solid ${T.b1}`, marginLeft: 12 },
       ddSubRow: { display: 'flex', alignItems: 'center', gap: 7, padding: '3px 6px', cursor: 'pointer', font: `11.5px/1.6 ${SANS}` },
       backdrop: { position: 'fixed', inset: 0, zIndex: 39, background: 'transparent' },
-      /* Horizontal overflow is deliberate: each channel keeps MIN_PANE_W and the
-         row scrolls instead of squeezing (#6, user decision). */
-      grid: {
-        display: 'grid', flex: 1, minHeight: 0, gap: 1, background: T.b1,
-        overflowX: 'auto', overflowY: 'hidden',
+      /* Channel row: a flex track (not a grid) because dividers are draggable.
+         Horizontal overflow stays deliberate: cells keep MIN_PANE_W and the row
+         scrolls instead of squeezing (#6), while the user can also widen a channel
+         by dragging the divider. */
+      track: {
+        display: 'flex', flex: 1, minHeight: 0,
+        overflowX: 'auto', overflowY: 'hidden', background: T.b1,
       },
-      pane: { display: 'flex', flexDirection: 'column', minWidth: 0, minHeight: 0, background: T.base, overflow: 'hidden' },
+      trackCell: {
+        display: 'flex', flexDirection: 'column', minWidth: MIN_PANE_W,
+        minHeight: 0, overflow: 'hidden', background: T.base,
+      },
+      /* A 5px grab area with a 1px line down its middle, so the divider still
+         reads as a hairline until you hover it. */
+      resizer: {
+        flex: '0 0 5px', display: 'flex', justifyContent: 'center', alignItems: 'stretch',
+        cursor: 'col-resize', touchAction: 'none', background: 'transparent',
+      },
+      resizerLine: { width: 1, background: T.b1, transition: 'background 120ms linear' },
+      resizerLineActive: { width: 1, background: T.business },
+      pane: { display: 'flex', flexDirection: 'column', flex: 1, minWidth: 0, minHeight: 0, background: T.base, overflow: 'hidden' },
       /* Activation ring: on the COMPOSER, not the whole pane (user feedback).
          Real content is the shipped composer, which we cannot give a class to, so
          the panel injects a scoped rule keyed on the host's stable
@@ -466,11 +480,28 @@ window.__ModuleLoader__.load({
           const host = hostRef.current
           if (host === null) return
           const scroll = host.querySelector('[data-conversation-scroll]')
+          const style = scroll === null ? null : window.getComputedStyle(scroll)
+          /* Turning the "where is the turn navigator" question into numbers.
+             The rail is ChatView's own child: it renders only when its item list
+             has at least two turns, and its height is the scrollport minus the
+             composer (`--turn-rail-band`), both published on this scroller by the
+             conversation content. `rail` counts candidate rail frames in the pane. */
+          const band = style === null
+            ? null
+            : style.getPropertyValue('--dsh-conversation-viewport-height').trim()
+          const composer = style === null ? null : style.getPropertyValue('--dsh-composer-height').trim()
+          const railFrames = [...host.querySelectorAll('[class*="_frame"]')]
+            .filter(element => element.querySelector('[data-index]') !== null).length
+          const marks = host.querySelectorAll('[data-index]').length
           setProbe({
             h: host.offsetHeight,
             s: scroll === null ? -1 : scroll.offsetHeight,
             c: scroll === null ? -1 : scroll.scrollHeight,
             n: host.querySelectorAll('*').length,
+            rail: railFrames,
+            marks,
+            band: band === '' ? 'unset' : band,
+            composer: composer === '' ? 'unset' : composer,
           })
         }
         measure()
@@ -480,6 +511,7 @@ window.__ModuleLoader__.load({
       const probeText = probe === null
         ? '测量中'
         : `h=${probe.h} scroll=${probe.s}/${probe.c} nodes=${probe.n}`
+          + ` · 轮次导航 rail=${probe.rail} 标记=${probe.marks} band=${probe.band} - composer=${probe.composer}`
       return h('div', { style: { flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' } },
         h('div', { style: CSS.diagLine, 'data-mixer-real-mode': mode },
           `${mode === 'pinned' ? '真实·标签' : '真实·默认'} · blank=${String(blank)} running=${String(running)} · ${probeText}`),
@@ -772,31 +804,122 @@ window.__ModuleLoader__.load({
       )
     }
 
+    /** Relative channel widths. Absent means the default weight of 1. */
+    const weightOf = (weights, id) => (weights !== undefined && weights[id] !== undefined ? weights[id] : 1)
+    const totalWeight = (weights, ids) => ids.reduce((sum, id) => sum + weightOf(weights, id), 0)
+
+    /**
+     * One draggable divider. Adjusts only its two neighbouring channels, keeping
+     * both at or above MIN_PANE_W; the track keeps its own horizontal scroll, so
+     * the sum is free to exceed the viewport.
+     */
+    function Resizer(props) {
+      const { before, after, ids, weights, trackRef, onResize } = props
+      const [hovered, setHovered] = useState(false)
+      const [dragging, setDragging] = useState(false)
+      const drag = useRef(null)
+
+      const onPointerDown = (event) => {
+        const track = trackRef.current
+        if (track === null) return
+        drag.current = {
+          startX: event.clientX,
+          contentWidth: Math.max(1, track.scrollWidth),
+          /* Snapshot the weight basis: the drag is proportional to it, so later
+             re-renders cannot make the divider chase the pointer. */
+          total: totalWeight(weights, ids),
+          beforeWeight: weightOf(weights, before),
+          afterWeight: weightOf(weights, after),
+        }
+        setDragging(true)
+        event.currentTarget.setPointerCapture(event.pointerId)
+        /* Keep the pointer from selecting transcript text while dragging. */
+        document.body.style.userSelect = 'none'
+        event.preventDefault()
+      }
+
+      const onPointerMove = (event) => {
+        const state = drag.current
+        if (state === null) return
+        const floor = state.total * (MIN_PANE_W / state.contentWidth)
+        let delta = ((event.clientX - state.startX) / state.contentWidth) * state.total
+        delta = Math.min(delta, state.afterWeight - floor)
+        delta = Math.max(delta, floor - state.beforeWeight)
+        onResize(before, state.beforeWeight + delta, after, state.afterWeight - delta)
+      }
+
+      const endDrag = (event) => {
+        if (drag.current === null) return
+        drag.current = null
+        setDragging(false)
+        document.body.style.userSelect = ''
+        if (event !== undefined && event.currentTarget.hasPointerCapture?.(event.pointerId)) {
+          event.currentTarget.releasePointerCapture(event.pointerId)
+        }
+      }
+
+      return h('div', {
+        style: CSS.resizer,
+        'data-mixer-resizer': `${before}|${after}`,
+        role: 'separator',
+        'aria-orientation': 'vertical',
+        title: '拖动调整这两个通道的宽度',
+        onPointerDown,
+        onPointerMove,
+        onPointerUp: endDrag,
+        onPointerCancel: endDrag,
+        onPointerEnter: () => setHovered(true),
+        onPointerLeave: () => setHovered(false),
+      }, h('span', {
+        style: hovered || dragging ? { ...CSS.resizerLine, ...CSS.resizerLineActive } : CSS.resizerLine,
+      }))
+    }
+
     function Grid(props) {
-      const { variant, ids, summaries, attention, focusId, SessionProvider, refFor, contentMode, views, running, onClose, renderFactorySlot } = props
-      /* Fixed minimum width per channel (#6): past what fits, the grid overflows
-         and its container scrolls horizontally rather than squeezing panes. */
-      const columns = ids
-        .map(id => `minmax(${MIN_PANE_W}px, ${variant === 'V3' && id === focusId ? 2.2 : 1}fr)`)
-        .join(' ')
-      return h('div', { style: { ...CSS.grid, gridTemplateColumns: columns } },
-        ids.map((id, index) => h(SessionProvider, { key: id, session: refFor(id) },
-          h(Pane, {
-            variant,
-            sessionId: id,
-            index,
-            summary: summaries[id],
-            summaries,
-            waiting: attention[id],
-            waitingKind: attention[id] === undefined ? undefined : attention[id].kind,
-            simulatedWaiting: attention[id] === undefined ? undefined : attention[id].simulated,
-            isFocus: id === focusId,
-            contentMode,
-            views,
-            running: running === undefined ? undefined : running[id] === true,
-            onClose,
-            renderFactorySlot,
-          }))))
+      const {
+        variant, ids, summaries, attention, focusId, SessionProvider, refFor, contentMode,
+        views, running, weights, onResize, onClose, renderFactorySlot,
+      } = props
+      const trackRef = useRef(null)
+      return h('div', { ref: trackRef, style: CSS.track, 'data-mixer-track': '' },
+        ids.map((id, index) => {
+          /* V3's emphasis multiplies the focused channel's weight; V2 (the chosen
+             variant) leaves widths to the user. */
+          const emphasis = variant === 'V3' && id === focusId ? 2.2 : 1
+          return h(React.Fragment, { key: id },
+            index === 0
+              ? null
+              : h(Resizer, {
+                  before: ids[index - 1],
+                  after: id,
+                  ids,
+                  weights,
+                  trackRef,
+                  onResize,
+                }),
+            h('div', {
+              style: { ...CSS.trackCell, flex: `${weightOf(weights, id) * emphasis} 1 0` },
+              'data-mixer-cell': id,
+            },
+              h(SessionProvider, { session: refFor(id) },
+                h(Pane, {
+                  variant,
+                  sessionId: id,
+                  index,
+                  summary: summaries[id],
+                  summaries,
+                  waiting: attention[id],
+                  waitingKind: attention[id] === undefined ? undefined : attention[id].kind,
+                  simulatedWaiting: attention[id] === undefined ? undefined : attention[id].simulated,
+                  isFocus: id === focusId,
+                  contentMode,
+                  views,
+                  running: running === undefined ? undefined : running[id] === true,
+                  onClose,
+                  renderFactorySlot,
+                }))),
+          )
+        }))
     }
 
     function ProtoBar(props) {
@@ -859,6 +982,9 @@ window.__ModuleLoader__.load({
          A stored selection (#9, user decision) wins over that default. */
       const [channels, setChannels] = useState(storedChannels === undefined ? null : storedChannels)
       const [hidden, setHidden] = useState([])
+      /* Per-channel relative width, changed by dragging a divider. Session-keyed so
+         it survives channels coming and going; unknown ids fall back to weight 1. */
+      const [weights, setWeights] = useState({})
 
       const list = useSessions(state => state)
       const status = useSessionStatus(snapshot => snapshot)
@@ -963,6 +1089,10 @@ window.__ModuleLoader__.load({
         setChannels([...visible, ...hidden])
         setHidden([])
       }
+      /* Dragging one divider only touches its two neighbours. */
+      const resizeChannels = (beforeId, beforeWeight, afterId, afterWeight) => {
+        setWeights({ ...weights, [beforeId]: beforeWeight, [afterId]: afterWeight })
+      }
 
       return h('div', { style: CSS.root },
         /* Activation for the SHIPPED composer (real content), which we cannot give a
@@ -1003,7 +1133,8 @@ window.__ModuleLoader__.load({
                 '用顶栏的工作区下拉勾选要关注的会话，只有勾中的会话会在这里列出。移除的会话不会停止，仍在等你的话顶栏会提示。'))
           : h(Grid, {
               variant, ids: visible, summaries, attention, focusId: effectiveFocus,
-              SessionProvider, refFor, contentMode, views, running,
+              SessionProvider, refFor, contentMode, views, running, weights,
+              onResize: resizeChannels,
               onClose: closeChannel, renderFactorySlot,
             }),
         PROTOTYPE
