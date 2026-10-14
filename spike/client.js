@@ -165,6 +165,38 @@ window.__ModuleLoader__.load({
         border: `1px solid ${T.b1}`, color: T.fg2, font: `11px/1 ${MONO}`, padding: 0,
       },
       body: { flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' },
+      /* Real-content view seam: the tab row replaces the shipped header's view nav. */
+      viewArea: { flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' },
+      viewTabs: {
+        display: 'flex', alignItems: 'center', gap: 2, flex: '0 0 auto',
+        padding: '0 10px', borderBottom: `1px solid ${T.b1}`,
+      },
+      viewTab: {
+        font: `11.5px/1.6 ${SANS}`, padding: '5px 9px', cursor: 'pointer', borderRadius: 0,
+        color: T.fg2, background: 'transparent', border: 'none',
+        borderBottom: '2px solid transparent',
+      },
+      viewTabOn: { color: T.fg, fontWeight: 600, borderBottom: `2px solid ${T.b2}` },
+      /* Mock-only chrome stand-in, so the pane layout can be judged while the
+         shipped header stays unmountable (see docs/plugin-gotchas.md). */
+      mockChrome: {
+        display: 'flex', alignItems: 'center', gap: 8, flex: '0 0 auto',
+        padding: '5px 10px', borderBottom: `1px solid ${T.b1}`, font: `11.5px/1.7 ${SANS}`,
+        whiteSpace: 'nowrap', overflow: 'hidden',
+      },
+      mockCrumb: { color: T.fg, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis' },
+      mockTabRow: {
+        display: 'flex', alignItems: 'center', gap: 2, flex: '0 0 auto',
+        padding: '0 10px', borderBottom: `1px solid ${T.b1}`,
+      },
+      mockTab: {
+        font: `11.5px/1.6 ${SANS}`, padding: '5px 9px', cursor: 'pointer', borderRadius: 0,
+        color: T.fg2, background: 'transparent', border: 'none',
+        borderBottom: '2px solid transparent',
+      },
+      mockTabOn: { color: T.fg, fontWeight: 600, borderBottom: `2px solid ${T.b2}` },
+      trajRow: { display: 'flex', gap: 8, padding: '6px 8px', borderBottom: `1px solid ${T.b1}`, font: `11px/1.7 ${MONO}` },
+      trajTurn: { color: T.fg2, flex: '0 0 auto', minWidth: 28 },
       transcript: {
         flex: 1, minHeight: 0, overflow: 'auto', padding: '10px 12px',
         display: 'flex', flexDirection: 'column', gap: 10, font: `12.5px/1.7 ${SANS}`,
@@ -312,23 +344,68 @@ window.__ModuleLoader__.load({
       )
     }
 
+    /** Mirror of the shipped `resolveActiveView`: preferred view, then Chat. */
+    function resolveActiveView(tabs, selectedId) {
+      const selected = selectedId === null || selectedId === undefined
+        ? undefined
+        : tabs.find(tab => tab.id === selectedId)
+      return selected !== undefined ? selected : tabs.find(tab => tab.id === 'chat')
+    }
+
+    /**
+     * Local component for the `conversation.content` factory's `views` seam.
+     *
+     * Mirrors the shipped DefaultConversationViews (which this replaces) and adds
+     * the view tab row that the shipped session header would have rendered. The
+     * seam hands this component the `conversation.session` slot props, so its
+     * `renderSlot` is bound to THAT entry's children: `conversation.view` is
+     * renderable, `conversation.session` is NOT. Calling an undeclared key throws
+     * during render and blanks the pane, which is what the first round's
+     * `FixedChatViews` did by mirroring the ui-subagent snippet out of context.
+     */
+    function MixerViews(props) {
+      const { useConversationViews, useStore, actions, renderSlot, openView, useInspectCall, view } = props
+      const tabs = useConversationViews(value => value)
+      const selectedId = useStore(state => state.view)
+      const viewRequest = useStore(state => state.viewRequest ?? null)
+      const inspectCall = useInspectCall(value => value)
+      const active = resolveActiveView(tabs, selectedId)
+      const viewId = view !== undefined && view !== null
+        ? view
+        : (active === undefined ? undefined : active.id)
+      return h('div', { style: CSS.viewArea, 'data-mixer-views': '' },
+        tabs !== undefined && tabs.length > 1
+          ? h('div', { style: CSS.viewTabs, 'data-mixer-view-tabs': '' },
+              tabs.map(tab => h('button', {
+                key: tab.id,
+                style: tab.id === viewId ? { ...CSS.viewTab, ...CSS.viewTabOn } : CSS.viewTab,
+                'data-mixer-view': tab.id,
+                onClick: () => actions.setView(tab.id),
+              }, tab.label)))
+          : null,
+        viewId === undefined
+          ? null
+          : renderSlot('conversation.view', {
+              inspectCall,
+              viewRequest,
+              openView,
+              completeViewRequest: actions.completeViewRequest,
+            }, { only: viewId }),
+      )
+    }
+
     /** Real factory content; reports an empty render instead of showing nothing. */
     function RealConversation(props) {
       const node = props.renderFactorySlot(
         'conversation.content',
         { variant: 'embedded', phase: 'active', hero: false },
-        { slots: { views: FixedChatViews } },
+        { slots: { views: MixerViews } },
       )
       if (node === null || node === undefined) {
         return h('div', { style: CSS.diag },
           '真实内容未产出：conversation.content 工厂这次返回了空。请把这条结果告诉 agent。')
       }
       return h('div', { style: { flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' } }, node)
-    }
-
-    /** Chat-only selection for an embedded occurrence (mirrors ui-subagent). */
-    function FixedChatViews(props) {
-      return h(React.Fragment, null, props.renderSlot('conversation.session', { view: 'chat' }))
     }
 
     /* ---------- unified top bar ---------- */
@@ -458,48 +535,106 @@ window.__ModuleLoader__.load({
       )
     }
 
+    /** Trajectory view stand-in, so the second tab is not a dead end. */
+    function MockTrajectory(props) {
+      const { task } = props
+      return h('div', { style: CSS.transcript, 'data-mixer-trajectory': '' },
+        h('div', { style: CSS.roleLine }, '轨迹（模拟）'),
+        task.tools.slice().reverse().map((tool, index) => h('div', { key: `${tool.name}-${index}`, style: CSS.trajRow },
+          h('span', { style: CSS.trajTurn }, `回合 ${task.tools.length - index}`),
+          h('span', { style: CSS.toolHead }, `${tool.name} · ${tool.arg}`),
+          h('span', { style: CSS.toolOut }, tool.out))),
+        h('div', { style: CSS.diag },
+          '真实的轨迹视图由 ui-chat 注册进 conversation.view，宿主一挂就有；这里只演示同一格内切换视图的样子。'),
+      )
+    }
+
     function Pane(props) {
       const { variant, sessionId, summary, waiting, waitingKind, simulatedWaiting, isFocus, index, contentMode, onClose, renderFactorySlot } = props
       const isWaiting = waiting !== undefined
       const title = summary === undefined ? sessionId : summary.displayTitle
+      const [mockTab, setMockTab] = useState('chat')
+      const mock = contentMode === 'mock'
+      const task = MOCK_TASKS[index % MOCK_TASKS.length]
       const paneStyle = {
         ...CSS.pane,
         ...(isWaiting && variant === 'V2' ? CSS.paneLifted : null),
         ...(variant === 'V3' && !isFocus ? CSS.dim : null),
       }
-      const headStyle = isWaiting && variant === 'V2' ? { ...CSS.head, ...CSS.headWaitingV2 } : CSS.head
+      const closeButton = h('button', {
+        style: CSS.closeBtn,
+        title: '从调音台移除（任务继续执行，仍在等你的话顶部条会提示）',
+        'data-mixer-close': sessionId,
+        onClick: () => onClose(sessionId),
+      }, '×')
+
+      /* Mock mode shows the full chrome the original view has, so the pane layout
+         can be judged now. Items marked 原型占位 are the shipped controls that a
+         plugin CANNOT mount here (their slots are declared by ui-conversation and
+         a duplicate declaration throws); they are labelled so nobody mistakes a
+         stand-in for the real control. */
+      const head = mock
+        ? h(React.Fragment, null,
+            h('div', {
+              style: { ...CSS.mockChrome, ...(isWaiting && variant === 'V2' ? CSS.headWaitingV2 : null) },
+              'data-mixer-mock-chrome': '',
+            },
+              isWaiting && variant === 'V1' ? h('span', { style: CSS.dot }) : null,
+              h('span', { style: { ...CSS.mockCrumb, ...(isWaiting && variant !== 'V3' ? CSS.headStrong : null) } }, title),
+              h('span', { style: CSS.chip, title: '原型占位：原件由 ui-agent-preset 注册进 conversation.session.header.actions' }, '智能体团队 · UI'),
+              h('span', { style: CSS.chip, title: '原型占位：原件由 ui-permission-presets 注册进 conversation.session.header.actions' }, '模式 · 标准'),
+              h('span', { style: { flex: 1 } }),
+              isWaiting && variant !== 'V3'
+                ? h(WaitingChip, { kind: waitingKind, simulated: simulatedWaiting, compact: true })
+                : null,
+              h('span', { style: CSS.chip }, '模拟内容'),
+              summary !== undefined && summary.running ? h('span', { style: CSS.chip }, '运行中') : null,
+              h('button', { style: CSS.ghostBtn, title: '原型占位：原件由 ui-open-in-app 注册进 conversation.session.header.utilities' }, '用 xx 打开'),
+              h('button', { style: CSS.ghostBtn, title: '原型占位：原件由 session-log-export 注册进 conversation.session.header.utilities' }, '下载日志'),
+              closeButton,
+            ),
+            h('div', { style: CSS.mockTabRow, 'data-mixer-mock-tabs': '' },
+              h('button', {
+                style: mockTab === 'chat' ? { ...CSS.mockTab, ...CSS.mockTabOn } : CSS.mockTab,
+                'data-mixer-view': 'chat',
+                onClick: () => setMockTab('chat'),
+              }, '对话'),
+              h('button', {
+                style: mockTab === 'trajectory' ? { ...CSS.mockTab, ...CSS.mockTabOn } : CSS.mockTab,
+                'data-mixer-view': 'trajectory',
+                onClick: () => setMockTab('trajectory'),
+              }, '轨迹'),
+            ))
+        : h('div', { style: isWaiting && variant === 'V2' ? { ...CSS.head, ...CSS.headWaitingV2 } : CSS.head },
+            isWaiting && variant === 'V1' ? h('span', { style: CSS.dot }) : null,
+            h('span', { style: { ...CSS.headTitle, ...(isWaiting && variant !== 'V3' ? CSS.headStrong : null) } }, title),
+            isWaiting && variant !== 'V3'
+              ? h(WaitingChip, { kind: waitingKind, simulated: simulatedWaiting, compact: true })
+              : null,
+            h('span', { style: { flex: 1 } }),
+            h('span', { style: CSS.chip, title: '真实模式：会话头由 ui-conversation 独占声明，插件无法在此挂载（见 docs/plugin-gotchas.md）' }, '精简头'),
+            summary !== undefined && summary.running ? h('span', { style: CSS.chip }, '运行中') : null,
+            closeButton,
+          )
+
       return h('div', {
         style: paneStyle,
         'data-mixer-pane': sessionId,
         'data-mixer-waiting': isWaiting ? 'yes' : 'no',
       },
-        h('div', { style: headStyle },
-          isWaiting && variant === 'V1' ? h('span', { style: CSS.dot }) : null,
-          h('span', { style: { ...CSS.headTitle, ...(isWaiting && variant !== 'V3' ? CSS.headStrong : null) } }, title),
-          isWaiting && variant !== 'V3'
-            ? h(WaitingChip, { kind: waitingKind, simulated: simulatedWaiting, compact: true })
-            : null,
-          h('span', { style: { flex: 1 } }),
-          contentMode === 'mock' ? h('span', { style: CSS.chip }, '模拟内容') : null,
-          summary !== undefined && summary.running ? h('span', { style: CSS.chip }, '运行中') : null,
-          /* 4. per-channel close: leaves the mixer, the task keeps running */
-          h('button', {
-            style: CSS.closeBtn,
-            title: '从调音台移除（任务继续执行，仍在等你的话顶部条会提示）',
-            'data-mixer-close': sessionId,
-            onClick: () => onClose(sessionId),
-          }, '×'),
-        ),
+        head,
         h('div', { style: CSS.body },
-          contentMode === 'mock'
-            ? h(MockConversation, {
-                task: MOCK_TASKS[index % MOCK_TASKS.length],
-                title,
-                sessionId,
-                waiting,
-                waitingKind,
-                simulatedWaiting,
-              })
+          mock
+            ? (mockTab === 'trajectory'
+                ? h(MockTrajectory, { task })
+                : h(MockConversation, {
+                    task,
+                    title,
+                    sessionId,
+                    waiting,
+                    waitingKind,
+                    simulatedWaiting,
+                  }))
             : h(RealConversation, { renderFactorySlot }),
         ),
       )
