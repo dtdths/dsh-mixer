@@ -254,28 +254,35 @@ renderFactorySlot('conversation.content', input, { slots: { views: Views } })
 - 注册 slot 前确认该键在父条目的 `children` 里被声明过；渲染未声明的键同样抛错。
 - 不修改别的条目的 store（本次因此改用"钉住视图"而非写 conversation store）。
 
-## 8.5 已知的宿主行为：轮次导航在窄格子里被隐藏（已确证）
+## 8.5 轮次导航：宿主按容器宽度隐藏，插件折中降阈值（已定稿）
 
-**结论：不是插件的问题，每格本来就各有一份轮次导航，但宿主按宽度把它藏了。**
+**现象**：窄通道里看不到对话右侧的轮次导航，把该格拉宽到一定程度才出现。
 
-`ui-chat` 的 `ChatView` 自己渲染轮次导航（对话右侧那条竖排标记），属于**每个视图实例**，所以每个通道天然独立持有。它消失只有一个原因：
+**根因（确证）**：轮次导航由 `ui-chat` 的 `ChatView` 自己渲染，属于**每个视图实例**，所以每个通道天然各有一份；它消失是宿主的容器查询：
 
 ```css
 /* ui-chat/src/client/chat/TurnNavigator.module.css:207 */
-@container (max-width: 900px) {
-  .frame { display: none; }
+@container (max-width: 900px) { .frame { display: none } }
+```
+
+`.slot` 声明了 `container-type: inline-size`，所以 900px 指的是**该对话容器自身的宽度**。而这个容器（rail 自己的 `.slot`）每侧还带 `calc(var(--dsh-composer-side-clearance) + 16px)` 的内边距；embedded 面板里 clearance 是 **8px**（`ConversationRoot.module.css` 的 `.embeddedBody`），故容器宽 = 面板宽 − 48。**换算下来，宿主实际要求面板约 948px 才显示。**
+
+**决定（用户）**：折中 —— 覆盖宿主阈值，换成插件自定的 **面板 640px**（容器 592px）。既不在极窄格里强塞，也不像宿主那样要到近千像素。
+
+**实现**：
+
+```css
+@container (min-width: 592px) {
+  [data-mixer-pane] [class*="_slot"] > [class*="_frame"] { display: block }
 }
 ```
 
-`.slot` 上声明了 `container-type: inline-size`，所以这个 **900px 指的是对话容器自身的宽度** —— 在调音台里就是**那一格的宽度**。原版视图占满窗口，所以一直可见；格子默认 380px（两三格约 700–800px）都被判为过窄而隐藏。**把某一格拉到 900px 以上，轮次导航就出现**（用户实测确认）。
+- 只对本插件的格子生效（`[data-mixer-pane]` 前缀）。
+- **选择器安全性已核查**：rail 的 `frame` 是它自己 `slot` 的直接子元素（`TurnNavigator.tsx:234/236`），两者同哈希前缀（构建产物里是 `fA77rG_slot` / `fA77rG_frame`）；`ChatView` 的 `.frame` 是**另一个**哈希（`L423fa_frame`）且没有 `_slot` 父级。定向扫描面板子树里的包（ui-conversation / ui-approval / ui-model-selection / session-log-export 无该类名；ui-attachment、ui-user-questions 有 `_frame` 但无 `_slot` 父级）—— **全子树只有 rail 这一个 `_slot > _frame` 组合**。
+- 本规则的特异性（3 个属性选择器）高于宿主单类规则，因此**即使宿主的声明在容器查询里也会被覆盖**；低于阈值时本规则不落，宿主的隐藏照旧生效。
+- 阈值是**常量**：`RAIL_MIN_PANE_W = 640`，容器阈值由它减去 48 得出（推导见代码注释）。
 
-**对设计的影响**：想在一格里看到轮次导航，那一格必须 > 900px。可用手段：
-
-- 拖分界线把某格拉宽（§5.4 已实现）；
-- V3 变体的"聚焦格自动变宽"（若宽度足够）；
-- 若要在窄格里也显示，只能**覆盖宿主这条容器查询**（插件注入作用域规则重新 `display` 该 rail）——但宿主隐藏它正是因为窄，强行显示会压到转写正文右侧，需要单独决定。
-
-**排查手法（已内置）**：真实模式每格诊断行会打印 `轮次导航 rail=/标记=/轮次=/宽=/band=`。判据：**轮次≥2 且 宽<900 → 被宿主隐藏**（预期行为）；**轮次≥2 且 宽>900 且 rail=0 → 才是真异常**。
+**排查手法（已内置）**：真实模式每格诊断行打印 `轮次导航 rail=/标记=/轮次=/宽=Npx（<640 才隐藏）/band=`。判据：**轮次≥2 且 宽≥640 且 rail=0 → 真异常**（此时先看是否被覆盖规则命中）；**宽<640 → 预期隐藏**。
 
 ## 9. 未决 / 后续
 

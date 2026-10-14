@@ -64,6 +64,20 @@ window.__ModuleLoader__.load({
     const PANE_LIMIT = 3
     /** Fixed minimum pane width; more channels than fit scroll horizontally (#6). */
     const MIN_PANE_W = 380
+    /**
+     * Pane width at which the turn navigator is allowed to show (user decision:
+     * lower the host's breakpoint rather than keep it or drop it).
+     *
+     * The host hides the rail below 900px of CONTAINER width
+     * (`TurnNavigator.module.css`: `@container (max-width: 900px) { .frame { display: none } }`),
+     * and that container is the rail's own `.slot`, which pads itself by
+     * `calc(var(--dsh-composer-side-clearance) + 16px)` per side. In our embedded
+     * panes the clearance is 8px (`ConversationRoot.module.css`, `.embeddedBody`),
+     * so the container measures pane − 2*(8+16) = pane − 48. The host's effective
+     * pane requirement is therefore ~948px; ours is 640px, i.e. 592px of container.
+     */
+    const RAIL_MIN_PANE_W = 640
+    const RAIL_MIN_CONTAINER_W = RAIL_MIN_PANE_W - 48
     /* Persisted channel selection (#9). Namespaced like ui-sidebar-right's
        `dsh.sidebar-right.v1`; the real build should go through the store
        persistence convention instead of touching localStorage directly. */
@@ -535,7 +549,7 @@ window.__ModuleLoader__.load({
           /* The rail is hidden below 900px of pane width by a HOST container query
              (ui-chat TurnNavigator.module.css: `@container (max-width: 900px) { .frame { display: none } }`),
              so width is part of the reading, not noise. */
-          + ` · 轮次导航 rail=${probe.rail} 标记=${probe.marks} 轮次=${probe.turns} 宽=${probe.w}px（<900 宿主隐藏） band=${probe.band}`
+          + ` · 轮次导航 rail=${probe.rail} 标记=${probe.marks} 轮次=${probe.turns} 宽=${probe.w}px（<${RAIL_MIN_PANE_W} 才隐藏） band=${probe.band}`
       return h('div', { style: { flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' } },
         h('div', { style: CSS.diagLine, 'data-mixer-real-mode': mode },
           `${mode === 'pinned' ? '真实·标签' : '真实·默认'} · blank=${String(blank)} running=${String(running)} · ${probeText}`),
@@ -1132,6 +1146,17 @@ window.__ModuleLoader__.load({
         h('style', { key: 'mixer-focus-ring' },
           '[data-mixer-pane] [data-composer-card]:focus-within{'
           + `outline:2px solid ${T.business};outline-offset:0}`),
+        /* Turn navigator: the host hides the rail below 900px of container width.
+           Re-show it from RAIL_MIN_PANE_W up, and only for our panes. The rail's
+           frame is a direct child of its own `.slot` (both hashed with the same
+           module prefix), so `[class*="_slot"] > [class*="_frame"]` selects exactly
+           it: ChatView's own `.frame` has a different hash and no `_slot` parent.
+           Our rule out-specifies the host's single-class rule, so it wins even
+           though the host's declaration sits in a container query; below our
+           threshold no rule applies and the host's hide stands. */
+        h('style', { key: 'mixer-rail-breakpoint' },
+          `@container (min-width:${RAIL_MIN_CONTAINER_W}px){`
+          + '[data-mixer-pane] [class*="_slot"]>[class*="_frame"]{display:block}}'),
         h(TopBar, {
           variant,
           channels: visible,
