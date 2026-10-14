@@ -191,6 +191,9 @@ renderFactorySlot('conversation.content', input, { slots: { views: Views } })
 
   两条依据：宿主 composer **自己把 outline 关掉了且没有替代反馈**（`InputBar.module.css` 里只有 `outline: none`，没有 `:focus-within`），所以这层反馈必须由插件画；焦点监听只挂内容区（点标签或 `×` 不点亮）。
 - **关闭 `×`**：把该格移出调音台（保留 retain，顶栏汇总可放回）。
+- **拖动头部排序**：通道头部 `draggable`，拖动即重排。从头部自带的控件（标签、`×`）起拖必须拒绝（`event.target.closest('button')`），否则点按钮会变成拖拽。
+- **从左侧栏拖入**：拖一个会话行到通道区，按落点插入对应位置。侧栏展开时才可用（调音台会折叠它，需手动展开）。
+- **放置指示**：拖动经过时在插入位置画一条 2px 的 `state-business-primary` 竖线。
 
 ### 5.4 布局与溢出
 
@@ -207,6 +210,26 @@ renderFactorySlot('conversation.content', input, { slots: { views: Views } })
 
   ⚠️ 手工调宽与"最小宽 + 横向滚动"是**互补**的：调宽改的是相对比例，总宽超出时仍然横向滚动。
   ⚠️ 目前宽度只存在内存里，**未持久化**（通道集合的持久化见 §4.1）；要不要记住宽度待定。
+
+### 5.4b 拖放的统一实现
+
+两条拖放需求**共用一条代码路径**，因为宿主的侧栏会话行**本来就把 SessionId 放在标准负载里**：
+
+```js
+// ui-workspace/src/client/rows/Rows.tsx:606（宿主自己写的）
+e.dataTransfer.setData('text/plain', node.id)   // node.id 就是 SessionId
+```
+
+因此调音台只需做**放置目标**，无需（也不该）给别人的 DOM 加拖拽属性：
+
+- 通道区 `onDragOver`：只接受 `types` 含 `text/plain` 的拖动，`preventDefault()` 并设 `dropEffect = 'move'`（**不 preventDefault 就不会触发 drop**）。
+- 落点索引：把指针 x 与各格中点比较，取第一个"指针在它左半边"的格；都不满足则插到末尾。
+- `onDrop`：读 `getData('text/plain')` 得到 SessionId，然后**移动或插入**：
+  - 该 id 已在通道集合里 → 移动（重排）；
+  - 不在 → 插入。
+  - 索引修正：`index` 是按**当前已渲染的格子**算的，若被拖的格本来就在更前面，插入位要减一。
+- **必须拒收非会话负载**：文本选中拖拽也是 `text/plain`，先确认 `summaries[id]` 存在再动通道集合。
+- 拖回一个之前被 `×` 关闭的通道，要同时把它从"已移出"集合里去掉。
 
 ### 5.5 视觉纪律
 

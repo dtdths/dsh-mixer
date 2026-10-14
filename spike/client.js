@@ -225,6 +225,11 @@ window.__ModuleLoader__.load({
         display: 'flex', flexDirection: 'column', minWidth: MIN_PANE_W,
         minHeight: 0, overflow: 'hidden', background: T.base,
       },
+      /* Where a dropped channel (or a session row dragged in from the sidebar)
+         would land. Two pixels of the host's focus colour, full height. */
+      dropIndicator: {
+        flex: '0 0 2px', alignSelf: 'stretch', background: T.business,
+      },
       /* A 5px grab area with a 1px line down its middle, so the divider still
          reads as a hairline until you hover it. */
       resizer: {
@@ -769,7 +774,23 @@ window.__ModuleLoader__.load({
         h('div', {
           style: headStyle,
           'data-mixer-head': '',
-          title: isWaiting ? (KIND_LABEL[waitingKind] || '等待你处理') : undefined,
+          /* Reorder by dragging the head. The payload matches what the sidebar
+             already puts on the wire for a session row (see Grid's drop handler),
+             so one code path serves both this and a drop from the sidebar. */
+          draggable: true,
+          title: isWaiting
+            ? `${KIND_LABEL[waitingKind] || '等待你处理'}（拖动可调整通道顺序）`
+            : '拖动可调整通道顺序',
+          onDragStart: (event) => {
+            /* Never start a channel drag from the head's own controls. */
+            const target = event.target
+            if (target !== null && typeof target.closest === 'function' && target.closest('button') !== null) {
+              event.preventDefault()
+              return
+            }
+            event.dataTransfer.effectAllowed = 'move'
+            event.dataTransfer.setData('text/plain', sessionId)
+          },
         },
           /* Running first: the user asked for the spinner ahead of the breadcrumb.
              Same glyph as the sidebar's session rows (`StateDot state="ongoing"`). */
@@ -916,15 +937,63 @@ window.__ModuleLoader__.load({
     function Grid(props) {
       const {
         variant, ids, summaries, attention, focusId, SessionProvider, refFor, contentMode,
-        views, running, weights, onResize, onClose, renderFactorySlot,
+        views, running, weights, onResize, onDropChannel, onClose, renderFactorySlot,
       } = props
       const trackRef = useRef(null)
-      return h('div', { ref: trackRef, style: CSS.track, 'data-mixer-track': '' },
+      /* Insertion gap while a channel (or a sidebar session row) hovers the track. */
+      const [dropIndex, setDropIndex] = useState(null)
+
+      const indexForPointer = (clientX) => {
+        const track = trackRef.current
+        if (track === null) return ids.length
+        const cells = [...track.querySelectorAll('[data-mixer-cell]')]
+        for (let position = 0; position < cells.length; position += 1) {
+          const rect = cells[position].getBoundingClientRect()
+          if (clientX < rect.left + rect.width / 2) return position
+        }
+        return cells.length
+      }
+
+      const onDragOver = (event) => {
+        /* Accept only the session-row payload the sidebar publishes. Reading the
+           value is not allowed during dragover, so this checks the format name. */
+        if (!event.dataTransfer.types.includes('text/plain')) return
+        event.preventDefault()
+        event.dataTransfer.dropEffect = 'move'
+        setDropIndex(indexForPointer(event.clientX))
+      }
+
+      const onDrop = (event) => {
+        event.preventDefault()
+        const sessionId = event.dataTransfer.getData('text/plain')
+        const index = indexForPointer(event.clientX)
+        setDropIndex(null)
+        /* A text selection drag would also arrive as text/plain: ignore anything
+           that is not a Session this client knows. */
+        if (sessionId === '' || summaries[sessionId] === undefined) return
+        onDropChannel(sessionId, index)
+      }
+
+      const indicator = h('div', { style: CSS.dropIndicator, 'data-mixer-drop-indicator': '' })
+
+      return h('div', {
+        ref: trackRef,
+        style: CSS.track,
+        'data-mixer-track': '',
+        onDragOver,
+        onDrop,
+        onDragLeave: (event) => {
+          /* Ignore the leave events that fire while moving between our own cells. */
+          if (event.currentTarget.contains(event.relatedTarget)) return
+          setDropIndex(null)
+        },
+      },
         ids.map((id, index) => {
           /* V3's emphasis multiplies the focused channel's weight; V2 (the chosen
              variant) leaves widths to the user. */
           const emphasis = variant === 'V3' && id === focusId ? 2.2 : 1
           return h(React.Fragment, { key: id },
+            dropIndex === index ? indicator : null,
             index === 0
               ? null
               : h(Resizer, {
@@ -957,7 +1026,8 @@ window.__ModuleLoader__.load({
                   renderFactorySlot,
                 }))),
           )
-        }))
+        }),
+        dropIndex === ids.length ? indicator : null)
     }
 
     function ProtoBar(props) {
@@ -1127,6 +1197,22 @@ window.__ModuleLoader__.load({
         setChannels([...visible, ...hidden])
         setHidden([])
       }
+      /**
+       * One path for both drag gestures: a channel head dragged inside the track,
+       * and a session row dragged in from the expanded sidebar (both publish the
+       * SessionId as `text/plain`, see Grid's drop handler).
+       * The dropped id is either already a channel (reorder) or new (insert).
+       */
+      const dropChannel = (sessionId, index) => {
+        const current = channels === null ? visible : channels
+        const from = current.indexOf(sessionId)
+        const without = current.filter(id => id !== sessionId)
+        /* `index` counts rendered cells, which still include the dragged one. */
+        const target = Math.max(0, Math.min(from !== -1 && from < index ? index - 1 : index, without.length))
+        setChannels([...without.slice(0, target), sessionId, ...without.slice(target)])
+        /* Dropping a channel that was closed earlier brings it back. */
+        setHidden(hidden.filter(id => id !== sessionId))
+      }
       /* Dragging one divider only touches its two neighbours. */
       const resizeChannels = (beforeId, beforeWeight, afterId, afterWeight) => {
         setWeights({ ...weights, [beforeId]: beforeWeight, [afterId]: afterWeight })
@@ -1184,6 +1270,7 @@ window.__ModuleLoader__.load({
               variant, ids: visible, summaries, attention, focusId: effectiveFocus,
               SessionProvider, refFor, contentMode, views, running, weights,
               onResize: resizeChannels,
+              onDropChannel: dropChannel,
               onClose: closeChannel, renderFactorySlot,
             }),
         PROTOTYPE
