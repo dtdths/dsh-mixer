@@ -157,8 +157,21 @@ window.__ModuleLoader__.load({
         whiteSpace: 'nowrap', overflow: 'hidden',
       },
       headWaitingV2: { boxShadow: `inset 2px 0 0 0 ${T.warn}` },
-      headTitle: { overflow: 'hidden', textOverflow: 'ellipsis' },
-      headStrong: { fontWeight: 600 },
+      /* Breadcrumb: ancestors are plain text (this pane IS the destination), the
+         last crumb carries the weight. */
+      crumbs: { display: 'flex', alignItems: 'center', gap: 5, minWidth: 0, overflow: 'hidden' },
+      crumb: { color: T.fg2, overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 160 },
+      crumbCurrent: {
+        color: T.fg, fontWeight: 600, overflow: 'hidden',
+        textOverflow: 'ellipsis', maxWidth: 220,
+      },
+      crumbSep: { color: T.fg2, opacity: 0.6 },
+      /* Running indicator: neutral grey, deliberately not the warning accent. */
+      spinner: {
+        flex: '0 0 auto', width: 11, height: 11, borderRadius: PILL,
+        border: `2px solid ${T.b1}`, borderTopColor: T.fg2,
+        animation: 'dsh-mixer-spin .8s linear infinite',
+      },
       closeBtn: {
         flex: '0 0 auto', width: 18, height: 18, lineHeight: '16px', textAlign: 'center',
         cursor: 'pointer', borderRadius: PILL, background: 'transparent',
@@ -178,24 +191,6 @@ window.__ModuleLoader__.load({
         borderBottom: '2px solid transparent',
       },
       viewTabOn: { color: T.fg, fontWeight: 600, borderBottom: `2px solid ${T.b2}` },
-      /* Mock-only chrome stand-in, so the pane layout can be judged while the
-         shipped header stays unmountable (see docs/plugin-gotchas.md). */
-      mockChrome: {
-        display: 'flex', alignItems: 'center', gap: 8, flex: '0 0 auto',
-        padding: '5px 10px', borderBottom: `1px solid ${T.b1}`, font: `11.5px/1.7 ${SANS}`,
-        whiteSpace: 'nowrap', overflow: 'hidden',
-      },
-      mockCrumb: { color: T.fg, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis' },
-      mockTabRow: {
-        display: 'flex', alignItems: 'center', gap: 2, flex: '0 0 auto',
-        padding: '0 10px', borderBottom: `1px solid ${T.b1}`,
-      },
-      mockTab: {
-        font: `11.5px/1.6 ${SANS}`, padding: '5px 9px', cursor: 'pointer', borderRadius: 0,
-        color: T.fg2, background: 'transparent', border: 'none',
-        borderBottom: '2px solid transparent',
-      },
-      mockTabOn: { color: T.fg, fontWeight: 600, borderBottom: `2px solid ${T.b2}` },
       trajRow: { display: 'flex', gap: 8, padding: '6px 8px', borderBottom: `1px solid ${T.b1}`, font: `11px/1.7 ${MONO}` },
       trajTurn: { color: T.fg2, flex: '0 0 auto', minWidth: 28 },
       transcript: {
@@ -566,8 +561,29 @@ window.__ModuleLoader__.load({
       )
     }
 
+    /** Ancestry chain for the breadcrumb, walking parentId up from a session. */
+    function crumbsFor(summaries, sessionId) {
+      const chain = []
+      const seen = new Set()
+      let cursor = sessionId
+      while (cursor !== undefined && cursor !== null && !seen.has(cursor) && chain.length < 6) {
+        seen.add(cursor)
+        const summary = summaries[cursor]
+        if (summary === undefined) {
+          chain.push({ id: cursor, title: cursor.slice(0, 8) })
+          break
+        }
+        chain.push({ id: cursor, title: summary.displayTitle })
+        cursor = summary.parentId
+      }
+      return chain.reverse()
+    }
+
     function Pane(props) {
-      const { variant, sessionId, summary, waiting, waitingKind, simulatedWaiting, isFocus, index, contentMode, views, onClose, renderFactorySlot } = props
+      const {
+        variant, sessionId, summary, summaries, waiting, waitingKind, simulatedWaiting,
+        isFocus, index, contentMode, views, running, onClose, renderFactorySlot,
+      } = props
       const isWaiting = waiting !== undefined
       const title = summary === undefined ? sessionId : summary.displayTitle
       const [mockTab, setMockTab] = useState('chat')
@@ -575,18 +591,27 @@ window.__ModuleLoader__.load({
          re-rendering the strict body with it, which is the plugin-side substitute
          for writing another entry's conversation store. */
       const [pinnedView, setPinnedView] = useState(null)
+      const [focused, setFocused] = useState(false)
       const viewsComponent = useMemo(() => makeViews(pinnedView), [pinnedView])
       const viewList = views !== undefined && views.length > 0
         ? views
         : [{ id: 'chat', label: '对话' }, { id: 'trajectory', label: '轨迹' }]
-      const activeViewId = pinnedView === null ? viewList[0].id : pinnedView
       const mock = contentMode === 'mock'
       const pinned = contentMode === 'real-pinned'
+      const activeViewId = mock
+        ? mockTab
+        : (pinned && pinnedView !== null ? pinnedView : viewList[0].id)
       const task = MOCK_TASKS[index % MOCK_TASKS.length]
+      const crumbs = crumbsFor(summaries === undefined ? {} : summaries, sessionId)
+      /* One paint list, so the waiting stripe and the focus ring never fight. */
+      const shadows = []
+      if (isWaiting && variant === 'V2') shadows.push(`inset 2px 0 0 0 ${T.warn}`)
+      if (focused) shadows.push(`inset 0 0 0 1px ${T.b2}`)
       const paneStyle = {
         ...CSS.pane,
         ...(isWaiting && variant === 'V2' ? CSS.paneLifted : null),
         ...(variant === 'V3' && !isFocus ? CSS.dim : null),
+        ...(shadows.length > 0 ? { boxShadow: shadows.join(', ') } : null),
       }
       const closeButton = h('button', {
         style: CSS.closeBtn,
@@ -595,76 +620,58 @@ window.__ModuleLoader__.load({
         onClick: () => onClose(sessionId),
       }, '×')
 
-      /* Mock mode shows the full chrome the original view has, so the pane layout
-         can be judged now. Items marked 原型占位 are the shipped controls that a
-         plugin CANNOT mount here (their slots are declared by ui-conversation and
-         a duplicate declaration throws); they are labelled so nobody mistakes a
-         stand-in for the real control. */
-      const head = mock
-        ? h(React.Fragment, null,
-            h('div', {
-              style: { ...CSS.mockChrome, ...(isWaiting && variant === 'V2' ? CSS.headWaitingV2 : null) },
-              'data-mixer-mock-chrome': '',
-            },
-              isWaiting && variant === 'V1' ? h('span', { style: CSS.dot }) : null,
-              h('span', { style: { ...CSS.mockCrumb, ...(isWaiting && variant !== 'V3' ? CSS.headStrong : null) } }, title),
-              h('span', { style: CSS.chip, title: '原型占位：原件由 ui-agent-preset 注册进 conversation.session.header.actions' }, '智能体团队 · UI'),
-              h('span', { style: CSS.chip, title: '原型占位：原件由 ui-permission-presets 注册进 conversation.session.header.actions' }, '模式 · 标准'),
-              h('span', { style: { flex: 1 } }),
-              isWaiting && variant !== 'V3'
-                ? h(WaitingChip, { kind: waitingKind, simulated: simulatedWaiting, compact: true })
-                : null,
-              h('span', { style: CSS.chip }, '模拟内容'),
-              summary !== undefined && summary.running ? h('span', { style: CSS.chip }, '运行中') : null,
-              h('button', { style: CSS.ghostBtn, title: '原型占位：原件由 ui-open-in-app 注册进 conversation.session.header.utilities' }, '用 xx 打开'),
-              h('button', { style: CSS.ghostBtn, title: '原型占位：原件由 session-log-export 注册进 conversation.session.header.utilities' }, '下载日志'),
-              closeButton,
-            ),
-            h('div', { style: CSS.mockTabRow, 'data-mixer-mock-tabs': '' },
-              h('button', {
-                style: mockTab === 'chat' ? { ...CSS.mockTab, ...CSS.mockTabOn } : CSS.mockTab,
-                'data-mixer-view': 'chat',
-                onClick: () => setMockTab('chat'),
-              }, '对话'),
-              h('button', {
-                style: mockTab === 'trajectory' ? { ...CSS.mockTab, ...CSS.mockTabOn } : CSS.mockTab,
-                'data-mixer-view': 'trajectory',
-                onClick: () => setMockTab('trajectory'),
-              }, '轨迹'),
-            ))
-        : h(React.Fragment, null,
-            h('div', { style: isWaiting && variant === 'V2' ? { ...CSS.head, ...CSS.headWaitingV2 } : CSS.head },
-              isWaiting && variant === 'V1' ? h('span', { style: CSS.dot }) : null,
-              h('span', { style: { ...CSS.headTitle, ...(isWaiting && variant !== 'V3' ? CSS.headStrong : null) } }, title),
-              isWaiting && variant !== 'V3'
-                ? h(WaitingChip, { kind: waitingKind, simulated: simulatedWaiting, compact: true })
-                : null,
-              h('span', { style: { flex: 1 } }),
-              h('span', {
-                style: CSS.chip,
-                title: pinned
-                  ? '真实·标签：这里的标签是插件自己实现的，点击即切换本格视图'
-                  : '真实·默认：视图由会话自身记忆决定（本档不接管）',
-              }, pinned ? '真实·标签' : '真实·默认'),
-              summary !== undefined && summary.running ? h('span', { style: CSS.chip }, '运行中') : null,
-              closeButton,
-            ),
-            h('div', { style: CSS.viewTabs, 'data-mixer-view-tabs': '' },
-              viewList.map(view => h('button', {
-                key: view.id,
-                style: view.id === activeViewId ? { ...CSS.viewTab, ...CSS.viewTabOn } : CSS.viewTab,
-                'data-mixer-view': view.id,
-                onClick: () => setPinnedView(view.id),
-              }, view.label))),
-          )
-
       return h('div', {
         style: paneStyle,
         'data-mixer-pane': sessionId,
         'data-mixer-waiting': isWaiting ? 'yes' : 'no',
+        'data-mixer-focused': focused ? 'yes' : 'no',
       },
-        head,
-        h('div', { style: CSS.body },
+        h('div', { style: isWaiting && variant === 'V2' ? { ...CSS.head, ...CSS.headWaitingV2 } : CSS.head, 'data-mixer-head': '' },
+          /* Running first: the user asked for the spinner ahead of the breadcrumb. */
+          running === true
+            ? h('span', {
+                style: CSS.spinner,
+                'data-mixer-loading': 'yes',
+                role: 'status',
+                'aria-label': 'AI 正在执行',
+                title: 'AI 正在执行',
+              })
+            : null,
+          h('nav', { style: CSS.crumbs, 'aria-label': '会话层级' },
+            crumbs.map((crumb, crumbIndex) => h(React.Fragment, { key: crumb.id },
+              crumbIndex > 0 ? h('span', { style: CSS.crumbSep }, '/') : null,
+              h('span', {
+                style: crumbIndex === crumbs.length - 1 ? CSS.crumbCurrent : CSS.crumb,
+                'data-mixer-crumb': crumb.id,
+                title: crumb.title,
+              }, crumb.title),
+            ))),
+          isWaiting && variant === 'V1' ? h('span', { style: CSS.dot }) : null,
+          isWaiting && variant !== 'V3'
+            ? h(WaitingChip, { kind: waitingKind, simulated: simulatedWaiting, compact: true })
+            : null,
+          h('span', { style: { flex: 1 } }),
+          mock ? h('span', { style: CSS.chip }, '模拟内容') : null,
+          closeButton,
+        ),
+        h('div', { style: CSS.viewTabs, 'data-mixer-view-tabs': '' },
+          viewList.map(view => h('button', {
+            key: view.id,
+            style: view.id === activeViewId ? { ...CSS.viewTab, ...CSS.viewTabOn } : CSS.viewTab,
+            'data-mixer-view': view.id,
+            onClick: () => (mock ? setMockTab(view.id) : setPinnedView(view.id)),
+          }, view.label))),
+        /* Activation: focus anywhere inside this pane's content rings the pane, so
+           the user can see which channel they are typing into. Scoped to the body
+           on purpose, so clicking the tabs or the close button does not light it
+           up. React focus events bubble, so the shipped composer inside real
+           content (and the mock textarea) both trigger it. */
+        h('div', {
+          style: CSS.body,
+          'data-mixer-body': '',
+          onFocusCapture: () => setFocused(true),
+          onBlurCapture: () => setFocused(false),
+        },
           mock
             ? (mockTab === 'trajectory'
                 ? h(MockTrajectory, { task })
@@ -688,7 +695,7 @@ window.__ModuleLoader__.load({
     }
 
     function Grid(props) {
-      const { variant, ids, summaries, attention, focusId, SessionProvider, refFor, contentMode, views, onClose, renderFactorySlot } = props
+      const { variant, ids, summaries, attention, focusId, SessionProvider, refFor, contentMode, views, running, onClose, renderFactorySlot } = props
       const columns = ids.map(id => (variant === 'V3' && id === focusId ? '2.2fr' : '1fr')).join(' ')
       return h('div', { style: { ...CSS.grid, gridTemplateColumns: columns } },
         ids.map((id, index) => h(SessionProvider, { key: id, session: refFor(id) },
@@ -697,19 +704,21 @@ window.__ModuleLoader__.load({
             sessionId: id,
             index,
             summary: summaries[id],
+            summaries,
             waiting: attention[id],
             waitingKind: attention[id] === undefined ? undefined : attention[id].kind,
             simulatedWaiting: attention[id] === undefined ? undefined : attention[id].simulated,
             isFocus: id === focusId,
             contentMode,
             views,
+            running: running === undefined ? undefined : running[id] === true,
             onClose,
             renderFactorySlot,
           }))))
     }
 
     function ProtoBar(props) {
-      const { variant, onVariant, forced, onForced, contentMode, onContentMode, state } = props
+      const { variant, onVariant, forced, onForced, forcedRunning, onForcedRunning, contentMode, onContentMode, state } = props
       const cycle = useCallback((step) => {
         const index = VARIANTS.indexOf(variant)
         onVariant(VARIANTS[(index + step + VARIANTS.length) % VARIANTS.length])
@@ -741,6 +750,14 @@ window.__ModuleLoader__.load({
         h('label', { style: CSS.protoToggle },
           h('input', { type: 'checkbox', checked: forced, onChange: event => onForced(event.target.checked) }),
           '模拟等待态'),
+        h('label', { style: CSS.protoToggle },
+          h('input', {
+            type: 'checkbox',
+            checked: forcedRunning,
+            'data-mixer-force-running': '',
+            onChange: event => onForcedRunning(event.target.checked),
+          }),
+          '模拟执行中'),
         h('span', { style: CSS.protoState }, state),
       )
     }
@@ -752,6 +769,7 @@ window.__ModuleLoader__.load({
       } = props
       const [variant, setVariant] = useState('V2')
       const [forced, setForced] = useState(true)
+      const [forcedRunning, setForcedRunning] = useState(true)
       const [contentMode, setContentMode] = useState('mock')
       const [focusId, setFocusId] = useState(null)
       const [channels, setChannels] = useState(null)
@@ -780,6 +798,8 @@ window.__ModuleLoader__.load({
         ? channels
         : (list && list.ids ? list.ids.slice(0, PANE_LIMIT) : [])
       const attention = {}
+      const running = {}
+      const observedRunning = {}
       ;[...visible, ...hidden].forEach(id => {
         /* Retain every channel we are tracking, including ones closed away from the
            layout: the waiting signal only exists for retained Sessions, so dropping
@@ -789,6 +809,19 @@ window.__ModuleLoader__.load({
         const real = entry === undefined ? undefined : entry.pendingInteraction
         if (real !== undefined) attention[id] = { kind: real.kind, simulated: false }
         else if (forced && id === visible[1]) attention[id] = { kind: 'approval', simulated: true }
+        /* Executing/thinking: SessionStatus.running is the live observation, the
+           Session summary is the Host fallback while the status source is silent. */
+        const summary = summaries[id]
+        observedRunning[id] = entry !== undefined && entry.running !== undefined
+          ? entry.running === true
+          : (summary === undefined ? false : summary.running === true)
+      })
+      /* Stage the indicator only when nothing is genuinely running, so the demo
+         never contradicts the real state. */
+      const anyObservedRunning = visible.some(id => observedRunning[id] === true)
+      const stageRunning = forcedRunning && !anyObservedRunning && visible.length > 0
+      ;[...visible, ...hidden].forEach(id => {
+        running[id] = observedRunning[id] === true || (stageRunning && id === visible[0])
       })
       const visibleWaiting = visible.filter(id => attention[id] !== undefined)
       const hiddenWaiting = hidden.filter(id => attention[id] !== undefined).length
@@ -823,6 +856,11 @@ window.__ModuleLoader__.load({
       }
 
       return h('div', { style: CSS.root },
+        /* The running spinner is the one place this prototype animates. It reports
+           state, so it is motivated; reduced motion disables it. */
+        h('style', { key: 'mixer-keyframes' },
+          '@keyframes dsh-mixer-spin{to{transform:rotate(360deg)}}'
+          + '@media (prefers-reduced-motion: reduce){[data-mixer-loading]{animation:none}}'),
         h(TopBar, {
           variant,
           channels: visible,
@@ -848,14 +886,16 @@ window.__ModuleLoader__.load({
                 '用顶栏的工作区下拉勾选要关注的会话，只有勾中的会话会在这里列出。移除的会话不会停止，仍在等你的话顶栏会提示。'))
           : h(Grid, {
               variant, ids: visible, summaries, attention, focusId: effectiveFocus,
-              SessionProvider, refFor, contentMode, views, onClose: closeChannel, renderFactorySlot,
+              SessionProvider, refFor, contentMode, views, running,
+              onClose: closeChannel, renderFactorySlot,
             }),
         PROTOTYPE
           ? h(ProtoBar, {
               variant, onVariant: setVariant,
               forced, onForced: setForced,
+              forcedRunning, onForcedRunning: setForcedRunning,
               contentMode, onContentMode: setContentMode,
-              state: `channels=${visible.length} hidden=${hidden.length} waiting=[${visibleWaiting.map(id => id.slice(0, 6)).join(' ')}]`,
+              state: `channels=${visible.length} hidden=${hidden.length} waiting=[${visibleWaiting.map(id => id.slice(0, 6)).join(' ')}] running=[${visible.filter(id => running[id]).map(id => id.slice(0, 6)).join(' ')}]`,
             })
           : null,
       )
