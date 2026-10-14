@@ -1,21 +1,27 @@
 /**
  * THROWAWAY PROTOTYPE - wayfinder tickets #3 (UI), #4 (feasibility), #9 (picker).
  *
- * Round 3, per user feedback: V2 is the chosen base, plus
- *   1. one unified top bar that manages every channel,
- *   2. no left sidebar, its global navigation folded into that top bar
- *      (workspace switch + new session in a two-level dropdown, plus the
- *      plugin / schedule / settings entries),
+ * Round 4, per user feedback: V2 is the chosen base, and
+ *   1. one unified top bar over the channels,
+ *   2. the top bar carries ONLY what the collapsed rail loses. The 56px rail
+ *      keeps the brand mark, the panel icons and the settings gear
+ *      (ui-sidebar/SidebarRoot + ui-settings-general/chrome), so repeating them
+ *      here would duplicate the same routes; the rail drops the workspace and
+ *      session browsing region, so the workspace dropdown lives here,
  *   3. a close button on every channel header: the channel leaves the mixer
- *      while its task keeps running.
+ *      while its task keeps running,
+ *   4. a `/mixer` slash command (ctx.commandUi, Client-owned action command).
  *
- * Two host limits this round had to work around, both verified in the runtime:
+ * Host limits verified in the runtime, and how this round handles them:
  *   - The sidebar cannot reach zero width: `computeColumns` uses
- *     SIDEBAR_COLLAPSED = 56 whenever the sidebar is closed, so the mixer
- *     collapses it to a 56px rail and lives with the rail.
- *   - Settings has no programmatic open path: the dialog is owned by the
- *     `sidebar.settings` occupant and `Shortcuts` exposes no invoke. The top
- *     bar button therefore reports the gap instead of faking it.
+ *     SIDEBAR_COLLAPSED = 56 whenever it is closed, so the mixer collapses it
+ *     and lives with the rail (user decision).
+ *   - Settings has no programmatic open path, but it survives in the rail as a
+ *     gear icon, so no top-bar replacement is needed (user decision).
+ *   - Nothing exposes the sidebar's collapsed state (`PanelInfo` carries only
+ *     `activePanelId`), so the collapse below reads the frame's own
+ *     `data-sidebar-collapsed` marker as a prototype shortcut. A real build
+ *     needs a layout API for this.
  *
  * Prototype rules apply: no polish, no tests, no persistence. Delete this
  * directory once the verdicts are recorded.
@@ -97,18 +103,14 @@ window.__ModuleLoader__.load({
 
     const CSS = {
       root: { display: 'flex', flexDirection: 'column', height: '100%', minHeight: 420, minWidth: 0, background: T.base, color: T.fg },
-      /* Unified top bar: brand, workspace dropdown, global entries, waiting summary. */
+      /* Unified top bar: mixer label, workspace dropdown, waiting summary,
+         view exit. Global entries deliberately absent, see the note in TopBar. */
       topbar: {
         display: 'flex', alignItems: 'center', gap: 8, flex: '0 0 auto', flexWrap: 'wrap',
         padding: '6px 12px', borderBottom: `1px solid ${T.b1}`, font: `12px/1.6 ${SANS}`,
         background: T.base,
       },
-      brand: { display: 'inline-flex', alignItems: 'center', gap: 7, fontWeight: 700, letterSpacing: '0.02em' },
-      brandMark: {
-        display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-        width: 20, height: 20, borderRadius: SURFACE, background: T.l2,
-        border: `1px solid ${T.b1}`, font: `10px/1 ${MONO}`,
-      },
+      topTitle: { fontWeight: 600 },
       divider: { width: 1, height: 18, background: T.b1, flex: '0 0 auto' },
       navBtn: {
         font: `12px/1.4 ${SANS}`, padding: '3px 9px', cursor: 'pointer', borderRadius: PILL,
@@ -401,17 +403,17 @@ window.__ModuleLoader__.load({
         variant, channels, hiddenWaiting, hiddenCount, summaries,
         attention, onFocus, focusId, backToConversation,
         workspaces, sessions, currentWorkspaceId, onToggleChannel, onSwitch, onNewSession,
-        onOpenPanel, settingsHint, onSettings,
       } = props
       const [dropdownOpen, setDropdownOpen] = useState(false)
       const waitingCount = channels.filter(id => attention[id] !== undefined).length
       const currentWorkspace = workspaces.find(w => w.workspaceId === currentWorkspaceId)
+      /* No brand, plugin, schedule or settings entry here on purpose: the 56px
+         rail keeps the brand mark, the panel icons and the settings gear
+         (ui-sidebar/SidebarRoot + ui-settings-general/chrome), so repeating them
+         would duplicate the same routes. The rail drops the workspace/session
+         browsing region, which is exactly what this bar carries instead. */
       return h('div', { style: CSS.topbar },
-        /* 1. brand */
-        h('span', { style: CSS.brand },
-          h('span', { style: CSS.brandMark }, 'DS'),
-          'DSH'),
-        h('span', { style: CSS.chip }, '调音台'),
+        h('span', { style: CSS.topTitle }, '调音台'),
         h('span', { style: CSS.divider }),
 
         /* 2. workspace dropdown: switch workspace + new session */
@@ -426,27 +428,6 @@ window.__ModuleLoader__.load({
             workspaces, sessions, currentWorkspaceId, channels,
             onToggleChannel, onSwitch, onNewSession,
           })),
-
-        /* 3. the rest of the sidebar's global entries */
-        h('button', {
-          style: CSS.navBtn,
-          onClick: () => onOpenPanel('plugins'),
-          'data-mixer-nav': 'plugins',
-        }, '插件'),
-        h('button', {
-          style: CSS.navBtn,
-          onClick: () => onOpenPanel('schedules'),
-          'data-mixer-nav': 'schedules',
-        }, '自动化任务'),
-        h('button', {
-          style: CSS.navBtn,
-          onClick: onSettings,
-          'data-mixer-nav': 'settings',
-        }, '设置'),
-        settingsHint
-          ? h('span', { style: { ...CSS.chip, maxWidth: 420 } },
-              '设置弹窗由 sidebar.settings 座位私有持有，没有对外 open API，落地需先补入口（已记为待决）')
-          : null,
 
         h('span', { style: { flex: 1 } }),
 
@@ -585,7 +566,7 @@ window.__ModuleLoader__.load({
     function MixerPanel(props) {
       const {
         useSessions, useSessionStatus, useWorkspaces, SessionProvider, renderFactorySlot, refFor,
-        backToConversation, selectPanel, startSession, openWorkspace, collapseSidebar, restoreSidebar,
+        backToConversation, startSession, openWorkspace, collapseSidebar, restoreSidebar,
       } = props
       const [variant, setVariant] = useState('V2')
       const [forced, setForced] = useState(true)
@@ -593,7 +574,6 @@ window.__ModuleLoader__.load({
       const [focusId, setFocusId] = useState(null)
       const [channels, setChannels] = useState(null)
       const [hidden, setHidden] = useState([])
-      const [settingsHint, setSettingsHint] = useState(false)
 
       const list = useSessions(state => state)
       const status = useSessionStatus(snapshot => snapshot)
@@ -674,9 +654,6 @@ window.__ModuleLoader__.load({
           onToggleChannel: toggleChannel,
           onSwitch: (workspaceId) => openWorkspace(workspaceId),
           onNewSession: (workspaceId) => startSession(workspaceId),
-          onOpenPanel: (panelId) => selectPanel(panelId),
-          settingsHint,
-          onSettings: () => setSettingsHint(true),
         }),
         visible.length === 0
           ? h('div', { style: CSS.empty },
@@ -757,13 +734,24 @@ window.__ModuleLoader__.load({
           inject: () => ({
             refFor,
             backToConversation: () => ctx.layout.selectPanel('conversation'),
-            selectPanel: (panelId) => ctx.layout.selectPanel(panelId),
             startSession: (workspaceId) => ctx.uiWorkspace.startSession(workspaceId),
             openWorkspace: (workspaceId) => ctx.uiWorkspace.openWorkspace(workspaceId),
             collapseSidebar,
             restoreSidebar,
           }),
         }, MixerPanel))
+
+        /* `/mixer`: a Client-owned slash command (ui-commands contract), so the
+           view is reachable from any composer without touching the header. */
+        if (ctx.commandUi !== undefined) {
+          ctx.commandUi.register({
+            name: 'mixer',
+            label: () => '调音台视图',
+            description: () => '把所有关注的会话并排放在一屏里',
+            available: () => true,
+            ui: { kind: 'action', run: () => ctx.layout.selectPanel(PANEL_ID) },
+          })
+        }
       },
     }
   },
