@@ -23,8 +23,16 @@
  *      stub AT FACTORY TIME. Install any hook stub before calling `captured.factory`.
  *   2. `apply()` may read services only through `ctx.inject`. A stub ctx must
  *      therefore provide `inject(deps, callback)`, or apply() throws.
+ *
+ * The DSH checkout to boot against comes from `DSH_REPO` (default: this machine's
+ * checkout). Point it at another checkout after switching DSH branches, so the guard
+ * boots the module against the Cordis actually in use:
+ *   DSH_REPO=/path/to/other/deepseek-harness node boot-check.mjs
  */
-import { Context } from '/Users/user/Documents/code/deepseek-harness/vendor/cordis/lib/index.js'
+const DSH_REPO = process.env.DSH_REPO ?? '/Users/user/Documents/code/deepseek-harness'
+/* Dynamic import: the context has to come from the checkout DSH_REPO names, and a
+   static import specifier cannot read the environment. */
+const { Context } = await import(`${DSH_REPO}/vendor/cordis/lib/index.js`)
 
 /* vendor/cordis/src/fiber.ts:147-152 */
 const STATE = { 0: 'PENDING', 1: 'LOADING', 2: 'ACTIVE', 3: 'FAILED', 4: 'DISPOSED' }

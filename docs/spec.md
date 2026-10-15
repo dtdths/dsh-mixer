@@ -266,7 +266,7 @@ e.dataTransfer.setData('text/plain', node.id)   // node.id 就是 SessionId
 
 ## 6. 验证清单（装完怎么确认生效）
 
-0. **先跑自动化**：`npm run check`（语法 + 47 个用例：纯函数缝 + 真 store 引擎 + 真 React（静态渲染与 jsdom 交互）+ 侧栏折叠 seam + 措辞对齐 + 冷启动守卫）。这一条绿了再动浏览器 —— 它覆盖的是"冷启动会炸整页"和"注册事实静默丢失"这两类只有跑起来才看得见的问题。
+0. **先跑自动化**：`npm run check`（语法 + 53 个用例：纯函数缝 + 真 store 引擎 + 真 React（静态渲染与 jsdom 交互）+ 侧栏折叠 seam + 措辞对齐 + 宿主契约漂移哨兵 + 冷启动守卫）。这一条绿了再动浏览器 —— 它覆盖的是"冷启动会炸整页"和"注册事实静默丢失"这两类只有跑起来才看得见的问题。
 1. **安装**：`plugin_manager` → `install_bundle`，target = **本包根目录**；确认返回 `application: applied` 且 `warnings` 为空。随后**把 `dsh-mixer-spike` 从 profile 卸掉**（否则原型与正式版同时注册 `main` 的 key、会话头按钮和 `/mixer`，行为不可预测）。
    **验收判据（profile 文件）**：`~/.dsh/profiles/web/package.json` 里应当只剩 `"dsh-mixer": "link:/Users/user/Documents/code/d/dsh-mixer"` 这一条 mixer 依赖，且 `dsh.profile.bundles` 里只列 `dsh-mixer`、**不含** `dsh-mixer-spike`（装之前那里写的是 spike）。
 2. **冷启动**（关键，别用热重载代替）：**硬刷新**页面，确认**没有** `Failed to load plugins` / `web boot: N entry did not activate`。任何 `apply()` 改动都必须重做这一步。
@@ -385,7 +385,17 @@ e.dataTransfer.setData('text/plain', node.id)   // node.id 就是 SessionId
 | `tests/interaction.test.mjs` | 把面板挂进 **jsdom + react-dom/client**，用真事件驱动（7 个用例）：× 关闭后停靠并可从顶栏放回（且 retain 未释放）、下拉勾选写 board、视图标签经工厂 seam 钉住 view、焦点标记、拖分界线（比例 + 380 夹紧 + 收尾）、头部拖动载荷与「从 × 起拖被拒」、轨道 drop 重排并拒收非会话负载 |
 | `tests/store.test.mjs` | 用**宿主的真 store 引擎**跑持久化（5 个用例）：键名与 root 无后缀、坏数据逐字段兜底、第二个实例恢复、无 localStorage 时的可用性 |
 | `tests/sidebar.test.mjs` / `tests/labels.test.mjs` | 折叠幂等（5 个）与措辞对齐宿主字典（5 个） |
+| `tests/host-contract.test.mjs` | **宿主契约漂移哨兵**（6 个）：`external` 的名字仍在该 checkout 的平台静态表与 seed 表里、`inject` 每条边都指向真实存在的包、slot 注册仍提供 `store` 与 session 子槽座位、root store 仍以无 key 方式实例化、侧栏行状态的四个事实与三种 kind 仍在、轮次导航仍由容器查询隐藏。其中前两条是真检查（能真失败），其余是锚点检查（命中 = 机制还在，不等于行为不变） |
 | `package.json` | `dsh.client.external` = store + primitives；`inject` = commands / conversation / layout；脚本 `test` / `boot-check` / `check` |
+
+**换宿主怎么验**（拉新 DSH 分支、或换一个 checkout 构建运行之后）：
+
+```bash
+cd dsh-mixer
+DSH_REPO=/新的/checkout 路径 npm run check
+```
+
+`tests/` 与 `boot-check.mjs` 都认 `DSH_REPO`（默认 `/Users/user/Documents/code/deepseek-harness`），会把**新 checkout 的真 React / 真 store 引擎 / 真 Cordis / 真侧栏字典**拿回来重跑；`tests/host-contract.test.mjs` 会直接指出**哪一条宿主契约移动了**，而不是等你发现某个状态点不对。
 
 **接线假设（已逐条对着宿主源码核实，不要再靠猜）**：
 
@@ -410,4 +420,4 @@ e.dataTransfer.setData('text/plain', node.id)   // node.id 就是 SessionId
 | `createSidebar(ctx)` | 折叠探针**唯一**所在地（§7.1，含"上游有 API 就换掉"的注释） |
 | `createBoardStore()` | `defineStore({persist:'dsh.mixer.v1'})`；store 不可用时退化到内存实现 |
 
-**验证**：`npm run check`（语法 + **47 个用例** + 冷启动）在本机全绿；**浏览器行为仍需用户按 §6 十条核对**（装根包、卸 `dsh-mixer-spike`、硬刷新）。
+**验证**：`npm run check`（语法 + **53 个用例** + 冷启动）在本机全绿；**浏览器行为仍需用户按 §6 十条核对**（装根包、卸 `dsh-mixer-spike`、硬刷新）。
