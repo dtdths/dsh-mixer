@@ -21,6 +21,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { readFileSync, existsSync } from 'node:fs'
 import { createRequire } from 'node:module'
+import { loadPlugin } from './harness.mjs'
 
 const DSH_REPO = process.env.DSH_REPO ?? '/Users/user/Documents/code/deepseek-harness'
 const require = createRequire(import.meta.url)
@@ -79,6 +80,43 @@ test('host contract: every inject edge names a real client package', () => {
       edge,
       `${found} now declares a different package name than the inject edge ${edge}`,
     )
+  }
+})
+
+test('plugin contract: every ctx.<service> the client reads is in the Cordis inject list', async () => {
+  /* The 2026-10-15 incident this pins: `uiWorkspace` was dropped from `inject` while a
+     click handler still read `ctx.uiWorkspace`. Nothing failed at boot — Cordis only
+     throws `cannot get property "x" without inject` when the read actually happens, so
+     the user saw a button that did nothing (docs/plugin-gotchas.md §1). This is a static
+     check, and it is REAL: it fails on the exact edit that caused it.
+     Cordis's own context members are not services and are allowed without an edge. */
+  const CORDIS_MEMBERS = new Set([
+    'effect', 'inject', 'on', 'get', 'set', 'provide', 'scope', 'dispose', 'is',
+    'parallel', 'waterfall', 'bail', 'emit', 'start', 'stop', 'root', 'fiber',
+  ])
+  const source = readFileSync(new URL('../client.js', import.meta.url), 'utf8')
+    /* Comments talk ABOUT this trap (`if (ctx.commandUi)` is the documented counter-
+       example), so they must not count as reads. */
+    .replaceAll(/\/\*[\s\S]*?\*\//g, '')
+    .replaceAll(/(^|[^:])\/\/[^\n]*/g, '$1')
+  const services = new Set()
+  for (const match of source.matchAll(/\bctx\.([A-Za-z_$][\w$]*)/g)) services.add(match[1])
+  /* `inject` here is the SHIPPED list: load it through the harness rather than copying. */
+  const { definition } = await loadPlugin()
+  const declared = definition.inject
+  for (const name of services) {
+    if (CORDIS_MEMBERS.has(name)) continue
+    assert.ok(
+      declared.includes(name),
+      `client.js reads ctx.${name} but the module's inject list is [${declared.join(', ')}]:`
+        + ' the read will throw "cannot get property'
+        + ` \"${name}\" without inject"` + ' at click time, not at boot',
+    )
+  }
+  /* …and the list must not keep edges nothing reads any more (the same edit in reverse,
+     which would leave the entry waiting on a service it does not use). */
+  for (const name of declared) {
+    assert.ok(services.has(name), `the inject list declares ${name}, which client.js never reads`)
   }
 })
 

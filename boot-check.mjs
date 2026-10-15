@@ -116,6 +116,11 @@ function makeContext({ withCommandUi }) {
       subscribe: () => () => {},
     },
   })
+  /* Every service in the module's `inject` list must exist here, or the fiber stays
+     PENDING and this check reports it — which is how the missing `uiWorkspace` edge was
+     caught on 2026-10-15 (the archive action reads it lazily, so nothing failed until a
+     user clicked). */
+  root.provide('uiWorkspace', { archiveSession: () => Promise.resolve() })
   if (withCommandUi) {
     root.provide('commandUi', { register: (contribution) => { commands.push(contribution); return () => {} } })
   }

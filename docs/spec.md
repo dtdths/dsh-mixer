@@ -42,14 +42,16 @@ dsh-mixer/
       "inject": [
         "@deepseek-ai/dsh-client-ui-conversation",
         "@deepseek-ai/dsh-client-ui-layout",
-        "@deepseek-ai/dsh-client-ui-commands"
+        "@deepseek-ai/dsh-client-ui-commands",
+        "@deepseek-ai/dsh-client-ui-workspace"
       ]
     }
   }
 }
 ```
 
-`dsh.client.inject` 是**加载顺序边**，不是服务注入。建议同时声明 `-ui-renderer` / `-ui-sidebar` / `-ui-session` / `-ui-slots`（调研报告的建议），使注册顺序稳定。
+`dsh.client.inject` 是**加载顺序边**，不是服务注入。它必须包含插件真正会调用的那些包的客户端半 —— 现在包括 `-ui-workspace`（归档走 `ctx.uiWorkspace.archiveSession`）。建议同时声明 `-ui-renderer` / `-ui-sidebar` / `-ui-session` / `-ui-slots`（调研报告的建议），使注册顺序稳定。
+⚠️ 与 Cordis 的**服务**注入是两回事：真正的服务边写在模块的 `inject: [...]` 里（见 §8 与 `docs/plugin-gotchas.md` §1）——**删掉一条服务边而 handler 仍晚读那个服务，启动不会报错，只在用户点击时抛** `cannot get property "x" without inject`。
 
 ## 3. 挂载点
 
@@ -306,7 +308,7 @@ e.dataTransfer.setData('text/plain', node.id)   // node.id 就是 SessionId
 
 ## 6. 验证清单（装完怎么确认生效）
 
-0. **先跑自动化**：`npm run check`（语法 + **75 个用例**：纯函数缝 + 真 store 引擎 + 真 React（静态渲染与 jsdom 交互）+ 侧栏折叠 seam + 措辞对齐 + 宿主契约漂移哨兵 + 冷启动守卫）。这一条绿了再动浏览器 —— 它覆盖的是"冷启动会炸整页"和"注册事实静默丢失"这两类只有跑起来才看得见的问题。
+0. **先跑自动化**：`npm run check`（语法 + **76 个用例**：纯函数缝 + 真 store 引擎 + 真 React（静态渲染与 jsdom 交互）+ 侧栏折叠 seam + 措辞对齐 + 宿主契约漂移哨兵 + 冷启动守卫）。这一条绿了再动浏览器 —— 它覆盖的是"冷启动会炸整页"和"注册事实静默丢失"这两类只有跑起来才看得见的问题。
 1. **安装**：`plugin_manager` → `install_bundle`，target = **本包根目录**；确认返回 `application: applied` 且 `warnings` 为空。随后**把 `dsh-mixer-spike` 从 profile 卸掉**（否则原型与正式版同时注册 `main` 的 key、会话头按钮和 `/mixer`，行为不可预测）。
    **验收判据（profile 文件）**：`~/.dsh/profiles/web/package.json` 里应当只剩 `"dsh-mixer": "link:/Users/user/Documents/code/d/dsh-mixer"` 这一条 mixer 依赖，且 `dsh.profile.bundles` 里只列 `dsh-mixer`、**不含** `dsh-mixer-spike`（装之前那里写的是 spike）。
 2. **冷启动**（关键，别用热重载代替）：**硬刷新**页面，确认**没有** `Failed to load plugins` / `web boot: N entry did not activate`。任何 `apply()` 改动都必须重做这一步。
@@ -434,7 +436,7 @@ agent 侧可复核的旁证（**只证明注册事实，不替代本清单的观
 | 2 | 顶栏 `会话`、`调音台`、视图切换按钮字太小，`会话` 没有按钮样式 | 顶栏升到 13px 档（标签 13.5/600、chip 11.5px）；`会话` 静止即带底色描边；每格视图标签 13px | §5.2 / §5.3 / §6.17 |
 | 3 | `会话` 两级菜单字偏小；点左列工作区时期望右列滚到对应分组 | 浮层字号升到 13px 档（分组标题 12px、列宽 196/344）；左列兼作跳转表（`data-mixer-group` + `scrollIntoView`） | §5.2 / §6.18 |
 | 4 | 已归档的会话仍列在浮层里、点了没反应 | 右列按 `archivedSessionIds` 过滤，与侧边栏一致 | §5.2 / §6.19 |
-| 6 | 归档按钮"点击无效"（浏览器实测） | 堵住静默失败：同步抛错 / 未提供 `archiveSession` / 拒绝 三条路都出顶栏提示，进行中显示 `归档中…` | §5.2 |
+| 6 | 归档按钮"点击无效"（浏览器实测） | **根因**：第二轮把 `uiWorkspace` 从模块 `inject` 里删了，而第四轮的归档在**点击时**才读 `ctx.uiWorkspace` —— Cordis 抛 `cannot get property "uiWorkspace" without inject`；晚读的 handler 不在启动期暴露，所以冷启动与全部测试都是绿的。**修**：`inject` 加回 `uiWorkspace`（`package.json` 的加载顺序边同步加 `-ui-workspace`），并加静态哨兵钉住"读到的每个 `ctx.<服务>` 都在 inject 里、且名单里不留无人读的边"；同时把静默失败一并堵掉（同步抛错 / 未提供 API / 拒绝 都出顶栏提示，进行中显示 `归档中…`） | §5.2 / §11 / [plugin-gotchas §1](./plugin-gotchas.md) |
 | 5 | 悬停会话行时希望有归档按钮，且归档后在通道里打开的那一格要关掉 | 行尾 hover 出 `归档` → `ctx.uiWorkspace.archiveSession`（与侧边栏同一调用）；正在执行则按错误名识别拒绝、行内确认"停止并归档"；通道由 §4.1 自动移除关掉 | §5.2 / §6.20 |
 
 ### 9.1 仍开放
@@ -473,7 +475,7 @@ agent 侧可复核的旁证（**只证明注册事实，不替代本清单的观
 | `tests/store.test.mjs` | 用**宿主的真 store 引擎**跑持久化（5 个用例）：键名与 root 无后缀、坏数据逐字段兜底、第二个实例恢复、无 localStorage 时的可用性 |
 | `tests/sidebar.test.mjs` / `tests/labels.test.mjs` | 折叠幂等（5 个）与措辞对齐宿主字典（5 个） |
 | `tests/host-contract.test.mjs` | **宿主契约漂移哨兵**（6 个）：`external` 的名字仍在该 checkout 的平台静态表与 seed 表里、`inject` 每条边都指向真实存在的包、slot 注册仍提供 `store` 与 session 子槽座位、root store 仍以无 key 方式实例化、侧栏行状态的四个事实与三种 kind 仍在、轮次导航仍由容器查询隐藏。其中前两条是真检查（能真失败），其余是锚点检查（命中 = 机制还在，不等于行为不变） |
-| `package.json` | `dsh.client.external` = store + primitives；`inject` = commands / conversation / layout；脚本 `test` / `boot-check` / `check` |
+| `package.json` | `dsh.client.external` = store + primitives；`inject` = commands / conversation / layout / workspace（Cordis 服务边：slots / sessions / layout / uiWorkspace）；脚本 `test` / `boot-check` / `check` |
 
 **换宿主怎么验**（拉新 DSH 分支、或换一个 checkout 构建运行之后）：
 
@@ -514,7 +516,7 @@ DSH_REPO=/新的/checkout 路径 npm run check
 
 另有三条行为常量，**只在文档与代码注释里约定、不进 `__test`**（它们不是判断，是时序参数，钉一个数字等于写同义反复）：`FOCUS_RETRY_FRAMES = 30`（光标交接等宿主 composer 出现的帧数上限，§5.1③）、`RECLAIM_WINDOW_MS = 2000`（抢回判据的时效窗，§5.1）与 `HERO_LIFT_PX = 48`（空会话 hero 的光学上调，§4.4）。
 
-后 4 条是 2026-10-15 第二轮新增（需求 1 / 2 / 4）。**用例数已落地**：v1 的 53 例 + 第二轮 15 例 = **68 例**全绿（`seams` +4、`render` +1、`interaction` +10）；第三轮再 +1（`interaction` 的「触发器要有按钮样」）；第四轮 +4（`seams` 的 `archiveActivityOf` + `interaction` 的归档过滤 / 悬停归档 / 停止并归档）；第五轮 +2（归档同步抛错 / 未提供 `archiveSession` 都要出提示，以及 `归档中…` 的进行中态）= **75 例**。`tests/harness.mjs` 的假宿主已补齐 `ctx.sessions.create` 的记录、`sessions.list` / `layout.panelInfo` 两个可订阅源（含 `setList` / `setPanelInfo` 驱动），并且 `useStore` 改成真的订阅 + 版本号重渲染——原来只读快照，导致"面板自己的写入"在测试里根本不会触发重渲染，`×` 关闭那条用例是靠别的原因才过的。
+后 4 条是 2026-10-15 第二轮新增（需求 1 / 2 / 4）。**用例数已落地**：v1 的 53 例 + 第二轮 15 例 = **68 例**全绿（`seams` +4、`render` +1、`interaction` +10）；第三轮再 +1（`interaction` 的「触发器要有按钮样」）；第四轮 +4（`seams` 的 `archiveActivityOf` + `interaction` 的归档过滤 / 悬停归档 / 停止并归档）；第五轮 +2（归档同步抛错 / 未提供 `archiveSession` 都要出提示，以及 `归档中…` 的进行中态）；第六轮 +1（`host-contract` 的 inject 名单哨兵）= **76 例**。`tests/harness.mjs` 的假宿主已补齐 `ctx.sessions.create` 的记录、`sessions.list` / `layout.panelInfo` 两个可订阅源（含 `setList` / `setPanelInfo` 驱动），并且 `useStore` 改成真的订阅 + 版本号重渲染——原来只读快照，导致"面板自己的写入"在测试里根本不会触发重渲染，`×` 关闭那条用例是靠别的原因才过的。
 
 **验证**：`npm run check`（语法 + **53 个用例** + 冷启动）在本机全绿；**浏览器行为已由用户按 §6 十条在根包上验收通过**（2026-10-15，装根包 + 卸 `dsh-mixer-spike` + 硬刷新；见 §6 验收记录）。
-**第二轮（需求 1–4）实现后的验证**：`npm run check` = **75 个用例全绿** + 冷启动 `PASS`（2026-10-15）；**§6 第 12–20 条属观感项，由用户在浏览器里逐条验收** —— 尤其"整格虚影"与"让位"两处只有真拖拽能验。
+**第二轮（需求 1–4）实现后的验证**：`npm run check` = **76 个用例全绿** + 冷启动 `PASS`（2026-10-15）；**§6 第 12–20 条属观感项，由用户在浏览器里逐条验收** —— 尤其"整格虚影"与"让位"两处只有真拖拽能验。

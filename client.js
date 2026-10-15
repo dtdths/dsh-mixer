@@ -1820,15 +1820,19 @@ window.__ModuleLoader__.load({
 
     return {
       __test: seams,
-      /* Service edges this entry needs at apply time. `uiWorkspace` is deliberately
-         gone: creating a Session goes through `ctx.sessions.create` instead, because
-         the host's `startSession` reveals it and that reveal leaves the mixer
-         (ADR-0003). `commandUi` is deliberately NOT here: it is provided later than
-         this entry, so it is awaited with ctx.inject below. Declaring it would leave
-         the entry pending on a boot that never provides it, and reading it unguarded
-         THROWS in Cordis (docs/plugin-gotchas.md §1: one such read failed the whole
-         Web boot). */
-      inject: ['slots', 'sessions', 'layout'],
+      /* Service edges this entry needs. `uiWorkspace` is here for the ARCHIVE action
+         (`ctx.uiWorkspace.archiveSession`, the same call the sidebar's row action makes):
+         creating a Session still goes through `ctx.sessions.create`, because the host's
+         `startSession` would reveal it and leave the mixer (ADR-0003).
+         ⚠️ Removing a name from this list while some handler still reads `ctx.<name>`
+         does NOT fail loudly: the read only happens when the user clicks, and Cordis
+         then throws `cannot get property "x" without inject` — which looks exactly like
+         a dead button (docs/plugin-gotchas.md §1; this happened with `uiWorkspace` on
+         2026-10-15). `tests/host-contract.test.mjs` now pins the invariant.
+         `commandUi` is deliberately NOT here: it is provided later than this entry, so it
+         is awaited with ctx.inject below. Declaring it would leave the entry pending on a
+         boot that never provides it, and reading it unguarded THROWS in Cordis. */
+      inject: ['slots', 'sessions', 'layout', 'uiWorkspace'],
       apply(ctx) {
         const refs = new Map()
         const refFor = (sessionId) => {

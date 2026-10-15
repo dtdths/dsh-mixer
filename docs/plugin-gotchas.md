@@ -34,6 +34,14 @@ ctx.inject(['commandUi'], (scope) => {
 
 **注意**：`ctx.inject(deps, cb)` 到的服务在回调里用 `scope.commandUi`（回调参数），不要回头再用 `ctx.commandUi`。
 
+**同一个陷阱的第二种形态（2026-10-15 实录，更隐蔽）**：把一条 `inject` **删掉**之后，**晚读**那个服务的 handler 不会在启动时炸 —— Cordis 只在读取真的发生时才抛那句话，于是表现为"某个按钮点了没反应"。
+
+- 经过：第二轮把 `uiWorkspace` 从模块 `inject` 里去掉（当时新建改走 `ctx.sessions.create`，不再需要它），第四轮又加了一个**点击时**才读 `ctx.uiWorkspace.archiveSession` 的归档按钮。冷启动、HMR、全部测试都正常；用户点归档 → 顶栏只出现一句 `归档失败：cannot get property "uiWorkspace" without inject`。
+- 两处护栏现在钉住它：
+  1. `tests/host-contract.test.mjs` 的 `plugin contract` 用例：静态扫描 `client.js`（先剥注释）里出现的每个 `ctx.<名>`，要求它出现在 `definition.inject` 里，**并且反过来**（名单里不许留没人读的边）。**这条哨兵已验证会真的变红**：把 `uiWorkspace` 从 inject 拿掉，报错文本与线上那句一致。
+  2. `boot-check.mjs` 的假 context 必须为 `inject` 里每个服务都 `provide`；少了就对不上，条目停在 `PENDING`，由既有断言报出来。
+- 配套纪律：事件处理器里**只** `console.error` 等于"点了没反应"。同步抛错也要变成用户可见的提示（spec §5.2 的归档流程就是这么修的）。
+
 ## 2. 冷启动不等于 HMR
 
 在已经启动好的页面上热重载插件时，**所有服务早就到位**，所以带 bug 的代码看起来完全正常。只有当页面**全新加载**、插件在 `commandUi` 之类的服务被 provide 之前 apply 时，才会暴露。
