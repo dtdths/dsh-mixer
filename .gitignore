@@ -19,3 +19,10 @@ pnpm-debug.log*
 # local env
 .env
 .env.local
+
+# The prototype lives on the `spike/mixer-two-pane` branch, not here. It may still
+# exist in this working tree because the installed profile links to it
+# (`~/.dsh/profiles/web/node_modules/dsh-mixer-spike -> <repo>/spike`): deleting the
+# directory would leave that link dangling until `dsh-mixer-spike` is uninstalled.
+# Never commit it on this branch.
+spike/
