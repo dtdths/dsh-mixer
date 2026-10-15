@@ -4,16 +4,19 @@
  *
  * The module calls `window.__ModuleLoader__.load(definition)` at import time and is
  * cached by the ESM loader, so each call imports it under a fresh query string with
- * the capture installed first. The factory's `require` is a table we control, which
- * is exactly what `dsh.client.external` provides at runtime.
+ * the capture installed first. The factory's `require` is a table we control, which is
+ * exactly what `dsh.client.external` provides at runtime.
  *
- * Two loading modes:
- *   - `loadPlugin()`: stub React. Enough for the pure seams (they never render).
- *   - `loadRendered()`: the host's real React and a faithful mini store engine, plus
- *     a fake host context, so the component tree can be rendered server-side. This is
- *     what catches "the React layer has never actually run" bugs without a browser.
+ * Three loading modes, in increasing fidelity:
+ *   - `loadPlugin()`:     stub React. Enough for the pure seams (they never render).
+ *   - `loadRendered()`:   the host's real React + `react-dom/server`, so the component
+ *                         tree renders to static HTML; plus a faithful mini store engine
+ *                         and a fake host context.
+ *   - `loadInteractive()`: the same, but into a real jsdom document with
+ *                         `react-dom/client`, so clicks, drags and focus can be driven.
  */
 import { createRequire } from 'node:module'
+import { readdirSync } from 'node:fs'
 
 const DSH_REPO = process.env.DSH_REPO ?? '/Users/user/Documents/code/deepseek-harness'
 
@@ -61,19 +64,159 @@ export function createStoreStub() {
   }
 }
 
-/** Import client.js with a module table, returning the definition and module instance. */
-async function load(requireTable) {
-  let captured
-  globalThis.window = {
-    __ModuleLoader__: { load: (definition) => { captured = definition } },
-    addEventListener: () => {},
-    removeEventListener: () => {},
+/**
+ * Resolve a package out of the host checkout's pnpm store, whichever version is
+ * installed. The store keeps each dependency under `.pnpm/<name>@<version>…`, so a
+ * directory scan keeps this working across upgrades.
+ * @param name - package name to find.
+ * @param entry - path inside the package to import.
+ * @returns the absolute path to import.
+ */
+function storePath(name, entry) {
+  const store = `${DSH_REPO}/node_modules/.pnpm`
+  const dir = readdirSync(store).find(candidate => candidate.startsWith(`${name}@`))
+  if (dir === undefined) throw new Error(`${name} is not installed in ${store}`)
+  return `${store}/${dir}/node_modules/${name}/${entry}`
+}
+
+/**
+ * The host's real React toolkit, resolved from a workspace package that declares it
+ * (the checkout is a pnpm workspace, so react is not at the repo root).
+ * @returns React, the server renderer, the client root factory, and `act`.
+ */
+export function hostModules() {
+  const hostRequire = createRequire(`${DSH_REPO}/packages/client/ui-primitives/package.json`)
+  const React = hostRequire('react')
+  return {
+    React,
+    renderToStaticMarkup: hostRequire('react-dom/server').renderToStaticMarkup,
+    createRoot: hostRequire('react-dom/client').createRoot,
+    act: React.act,
   }
-  globalThis.document = { querySelector: () => null, activeElement: null }
+}
+
+/**
+ * Install a jsdom document as the process globals, with the pointer-capture API the
+ * resizer uses (jsdom does not implement it).
+ * @returns the JSDOM instance and its window.
+ */
+export function setupDom() {
+  const { JSDOM } = createRequire(storePath('jsdom', 'package.json'))(storePath('jsdom', 'lib/api.js'))
+  /* A real URL: jsdom refuses localStorage on the default opaque origin, and the store
+     engine reads localStorage while rehydrating. */
+  const dom = new JSDOM('<!doctype html><html><body><div id="root"></div></body></html>', {
+    pretendToBeVisual: true,
+    url: 'http://localhost/',
+  })
+  const { window } = dom
+  for (const key of ['window', 'document', 'navigator', 'HTMLElement', 'Element', 'Node', 'Event', 'CustomEvent', 'MouseEvent', 'KeyboardEvent', 'getComputedStyle', 'requestAnimationFrame', 'cancelAnimationFrame', 'localStorage']) {
+    if (window[key] === undefined) continue
+    /* Node 24 exposes some of these as getter-only globals (navigator, localStorage),
+       so plain assignment throws; define them instead. */
+    Object.defineProperty(globalThis, key, { value: window[key], configurable: true, writable: true })
+  }
+  globalThis.IS_REACT_ACT_ENVIRONMENT = true
+  /* jsdom has no pointer capture: the resizer calls it on pointerdown. */
+  window.Element.prototype.setPointerCapture = () => {}
+  window.Element.prototype.releasePointerCapture = () => {}
+  window.Element.prototype.hasPointerCapture = () => false
+  return { dom, window }
+}
+
+/** Import client.js with a module table, returning the plugin definition. */
+async function load(requireTable, windowLike) {
+  let captured
+  const win = windowLike ?? { addEventListener: () => {}, removeEventListener: () => {} }
+  win.__ModuleLoader__ = { load: (definition) => { captured = definition } }
+  globalThis.window = win
+  globalThis.document = win.document ?? { querySelector: () => null, activeElement: null }
   const path = new URL('../client.js', import.meta.url).pathname
   await import(`${path}?t=${Date.now()}-${Math.random()}`)
   if (captured === undefined) throw new Error('client.js never called __ModuleLoader__.load')
   return captured.factory(requireTable)
+}
+
+/**
+ * The module table the plugin's `require` sees. Mirrors `dsh.client.external`.
+ * @param options - real React, whether the store package is present, and the host's
+ *   React for the primitives stub.
+ * @returns the table function.
+ */
+function moduleTable({ React, withStore, storeModule }) {
+  return (name) => {
+    if (name === 'react') return React
+    if (name === '@deepseek-ai/dsh-client-store') {
+      if (!withStore) throw new Error(`module "${name}" is not in the table`)
+      return storeModule
+    }
+    if (name === '@deepseek-ai/dsh-client-ui-primitives') {
+      return { StateDot: (props) => React.createElement('svg', { 'data-state': props.state }) }
+    }
+    throw new Error(`unexpected require('${name}')`)
+  }
+}
+
+const DEFAULT_VIEW_ENTRIES = [
+  { options: { id: 'chat', label: '对话' } },
+  { options: { id: 'trajectory', label: '轨迹' } },
+]
+
+/**
+ * Build the fake host context, apply the plugin through it, and capture what it
+ * registered. This is the part that stands in for `dsh web`'s slot registry.
+ * @param definition - the plugin definition.
+ * @param options - `viewEntries` seeds `conversation.view`.
+ * @returns the captures: registrations, commands, retained/released Sessions, ctx.
+ */
+export function createHost(definition, { viewEntries = DEFAULT_VIEW_ENTRIES } = {}) {
+  const registrations = []
+  const commands = []
+  const retained = []
+  const released = []
+  const ctx = {
+    inject: (deps, callback) => callback({ commandUi: { register: (contribution) => { commands.push(contribution) } } }),
+    effect: () => () => {},
+    slots: {
+      inject: (key, callback) => { callback() },
+      register: (options, component) => { registrations.push({ options, component }); return () => {} },
+      entries: (name) => (name === 'conversation.view' ? viewEntries : []),
+    },
+    sessions: {
+      retain: (sessionId) => {
+        retained.push(sessionId)
+        return { ready: Promise.resolve(), release: () => released.push(sessionId) }
+      },
+    },
+    layout: { selectPanel: () => {}, toggleSidebar: () => {} },
+    uiWorkspace: { startSession: () => {}, openWorkspace: () => {} },
+  }
+  definition.apply(ctx)
+  const main = registrations.find(entry => entry.options.name === 'main')
+  if (main === undefined) throw new Error('main panel was not registered')
+  return { registrations, commands, ctx, retained, released, main }
+}
+
+/**
+ * The props the slot registry would hand the panel: the registration's own `inject()`
+ * output, the store's `useStore`/`actions` share, and the data hooks.
+ * @param main - the captured `main` registration.
+ * @param input - the store instance, snapshots, and the factory stub.
+ * @returns the props object.
+ */
+export function panelProps(main, { instance, list, status, workspaces, renderFactorySlot, React }) {
+  return {
+    ...main.options.inject(),
+    useStore: selector => selector(instance.getSnapshot()),
+    actions: instance.actions,
+    useSessions: selector => selector(list),
+    useSessionStatus: selector => selector(status),
+    useWorkspaces: selector => selector(workspaces),
+    SessionProvider: providerProps => providerProps.children,
+    renderFactorySlot: renderFactorySlot ?? ((name, input2) => React.createElement('div', {
+      'data-factory': name,
+      'data-variant': input2.variant,
+    })),
+  }
 }
 
 /**
@@ -94,57 +237,17 @@ export async function loadPlugin() {
 }
 
 /**
- * Load with real React and a fake host, then apply the plugin.
- *
- * The returned `render()` helper builds the props the slot registry would hand the
- * panel: the registration's own `inject()` output, the store's `useStore`/`actions`
- * share, and the data hooks over the caller's snapshots.
+ * Load with real React and a fake host, then render the panel to static HTML.
  * @param options - `withStore: false` drops the store package from the table (the
  *   plugin must degrade to its in-memory board); `viewEntries` seeds the registry.
  * @returns the plugin definition, captured registrations, and the render helper.
  */
-export async function loadRendered({ withStore = true, viewEntries = [{ options: { id: 'chat', label: '对话' } }, { options: { id: 'trajectory', label: '轨迹' } }] } = {}) {
-  /* The host checkout is a pnpm workspace: react/react-dom live in the store, not at
-     the repo root, so resolve them from a workspace package that declares them. */
-  const hostRequire = createRequire(`${DSH_REPO}/packages/client/ui-primitives/package.json`)
-  const React = hostRequire('react')
-  const { renderToStaticMarkup } = hostRequire('react-dom/server')
+export async function loadRendered(options = {}) {
+  const { withStore = true, viewEntries = DEFAULT_VIEW_ENTRIES } = options
+  const { React, renderToStaticMarkup } = hostModules()
   const storeModule = createStoreStub()
-  const definition = await load((name) => {
-    if (name === 'react') return React
-    if (name === '@deepseek-ai/dsh-client-store') {
-      if (!withStore) throw new Error(`module "${name}" is not in the table`)
-      return storeModule
-    }
-    if (name === '@deepseek-ai/dsh-client-ui-primitives') {
-      return { StateDot: (props) => React.createElement('svg', { 'data-state': props.state }) }
-    }
-    throw new Error(`unexpected require('${name}')`)
-  })
-
-  const registrations = []
-  const commands = []
-  const retained = []
-  const released = []
-  const ctx = {
-    inject: (deps, callback) => callback({ commandUi: { register: (contribution) => { commands.push(contribution) } } }),
-    effect: () => () => {},
-    slots: {
-      inject: (key, callback) => { callback() },
-      register: (options, component) => { registrations.push({ options, component }); return () => {} },
-      entries: (name) => (name === 'conversation.view' ? viewEntries : []),
-    },
-    sessions: {
-      retain: (sessionId) => {
-        retained.push(sessionId)
-        const reference = { ready: Promise.resolve(), release: () => released.push(sessionId) }
-        return reference
-      },
-    },
-    layout: { selectPanel: () => {}, toggleSidebar: () => {} },
-    uiWorkspace: { startSession: () => {}, openWorkspace: () => {} },
-  }
-  definition.apply(ctx)
+  const definition = await load(moduleTable({ React, withStore, storeModule }))
+  const host = createHost(definition, { viewEntries })
 
   /**
    * Render the registered `main` panel for one snapshot set.
@@ -155,26 +258,69 @@ export async function loadRendered({ withStore = true, viewEntries = [{ options:
    * @returns `{ html, instance, props }`.
    */
   const render = ({ board, list, status, workspaces }) => {
-    const main = registrations.find(entry => entry.options.name === 'main')
-    if (main === undefined) throw new Error('main panel was not registered')
-    const instance = main.options.store.create()
+    const instance = host.main.options.store.create()
     if (board !== undefined) instance.actions.setChannels(board.channels)
     if (board !== undefined && Object.keys(board.weights).length > 0) instance.actions.setWeights(board.weights)
-    const props = {
-      ...main.options.inject(),
-      useStore: selector => selector(instance.getSnapshot()),
-      actions: instance.actions,
-      useSessions: selector => selector(list),
-      useSessionStatus: selector => selector(status),
-      useWorkspaces: selector => selector(workspaces),
-      SessionProvider: providerProps => providerProps.children,
-      renderFactorySlot: (name, input) => React.createElement('div', {
-        'data-factory': name,
-        'data-variant': input.variant,
-      }),
-    }
-    return { html: renderToStaticMarkup(React.createElement(main.component, props)), instance, props }
+    const props = panelProps(host.main, { instance, list, status, workspaces, React })
+    return { html: renderToStaticMarkup(React.createElement(host.main.component, props)), instance, props }
   }
 
-  return { definition, registrations, commands, ctx, render, retained, released, React }
+  return { definition, registrations: host.registrations, commands: host.commands, ctx: host.ctx, render, retained: host.retained, released: host.released, React }
+}
+
+/**
+ * Load into a real jsdom document so the panel can be mounted and driven.
+ * @param options - `withStore` as above; `viewEntries` seeds `conversation.view`.
+ * @returns the mount helper plus everything the caller needs to assert.
+ */
+export async function loadInteractive(options = {}) {
+  const { withStore = true, viewEntries = DEFAULT_VIEW_ENTRIES } = options
+  const { window } = setupDom()
+  const { React, createRoot, act } = hostModules()
+  const storeModule = createStoreStub()
+  const definition = await load(moduleTable({ React, withStore, storeModule }), window)
+  const host = createHost(definition, { viewEntries })
+  const instance = host.main.options.store.create()
+  const container = window.document.getElementById('root')
+  const root = createRoot(container)
+  /* Factory calls, including the `views` seam the pane pins a view through. */
+  const factoryCalls = []
+  const renderFactorySlot = (name, input, slotOptions) => {
+    factoryCalls.push({ name, input })
+    if (slotOptions !== undefined && slotOptions.slots !== undefined && slotOptions.slots.views !== undefined) {
+      slotOptions.slots.views({
+        renderSlot: (slotName, slotInput) => { factoryCalls.push({ name: slotName, input: slotInput }) },
+      })
+    }
+    return React.createElement('div', {
+      'data-factory': name,
+      'data-variant': input.variant,
+      tabIndex: 0,
+    })
+  }
+  let snapshots = { list: undefined, status: new Map(), workspaces: undefined }
+  /**
+   * Render the panel with the given snapshots (unset keys keep their previous value).
+   * A `board` is written through the instance's actions first, the way the persisted
+   * store would arrive.
+   * @param next - partial snapshot set, optionally with `board`.
+   */
+  const draw = (next = {}) => {
+    if (next.board !== undefined) {
+      instance.actions.setChannels(next.board.channels)
+      instance.actions.setWeights(next.board.weights ?? {})
+    }
+    snapshots = { ...snapshots, ...next }
+    act(() => {
+      root.render(React.createElement(host.main.component, panelProps(host.main, {
+        instance,
+        ...snapshots,
+        renderFactorySlot,
+        React,
+      })))
+    })
+  }
+  const $ = selector => container.querySelector(selector)
+  const $$ = selector => [...container.querySelectorAll(selector)]
+  return { window, document: window.document, React, act, root, container, $, $$, draw, instance, factoryCalls, host, renderFactorySlot }
 }

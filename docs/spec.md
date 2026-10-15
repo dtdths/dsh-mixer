@@ -266,13 +266,16 @@ e.dataTransfer.setData('text/plain', node.id)   // node.id 就是 SessionId
 
 ## 6. 验证清单（装完怎么确认生效）
 
-0. **先跑自动化**：`npm run check`（语法 + 40 个用例：纯函数缝 + 真 store 引擎持久化 + 真 React 静态渲染 + 侧栏折叠 seam + 侧栏措辞对齐 + 冷启动守卫）。这一条绿了再动浏览器 —— 它覆盖的是"冷启动会炸整页"和"注册事实静默丢失"这两类只有跑起来才看得见的问题。
+0. **先跑自动化**：`npm run check`（语法 + 47 个用例：纯函数缝 + 真 store 引擎 + 真 React（静态渲染与 jsdom 交互）+ 侧栏折叠 seam + 措辞对齐 + 冷启动守卫）。这一条绿了再动浏览器 —— 它覆盖的是"冷启动会炸整页"和"注册事实静默丢失"这两类只有跑起来才看得见的问题。
 1. **安装**：`plugin_manager` → `install_bundle`，target = **本包根目录**；确认返回 `application: applied` 且 `warnings` 为空。随后**把 `dsh-mixer-spike` 从 profile 卸掉**（否则原型与正式版同时注册 `main` 的 key、会话头按钮和 `/mixer`，行为不可预测）。
    **验收判据（profile 文件）**：`~/.dsh/profiles/web/package.json` 里应当只剩 `"dsh-mixer": "link:/Users/user/Documents/code/d/dsh-mixer"` 这一条 mixer 依赖，且 `dsh.profile.bundles` 里只列 `dsh-mixer`、**不含** `dsh-mixer-spike`（装之前那里写的是 spike）。
 2. **冷启动**（关键，别用热重载代替）：**硬刷新**页面，确认**没有** `Failed to load plugins` / `web boot: N entry did not activate`。任何 `apply()` 改动都必须重做这一步。
 3. **入口**：会话头「打开目录」左侧出现切换按钮；在 composer 里敲 `/mixer` 也能进入。
 4. **并排**：每格渲染出官方 composer 与完整对话记录（不是空白，也不是只读快照）。
-5. **独立**：两格的输入框草稿互不干扰（同一会话放进两格会共享草稿，这是契约）。
+   （这一条**只有浏览器能验**：`renderFactorySlot` 的真实产出、官方 composer、焦点描边、
+   真实拖放都得在真宿主里看。它的**插件侧前置**已被自动化覆盖：工厂被调用、参数为
+   `variant: 'embedded'`、每格一份，见 `tests/render.test.mjs`。）
+5. **独立**：两格的输入框草稿互不干扰（同一会话放进两格会共享草稿，这是契约）。（只有浏览器能验。）
 6. **等待态**：制造一次需要授权/确认的操作，对应通道应出现 V2 标记，且顶栏汇总计数 +1。三种 kind（审批 / 计划确认 / 提问）都要出标记；域注册的其它 kind **不应**出标记（§4.3b 白名单）。
 7. **状态四档对齐侧栏 + 空闲无标记**（用户 2026-10-15 新增）：同一会话在左侧会话行与调音台格子里同时可见时，逐档核对一致 —— 等待（琥珀 + 竖条）、执行中（转圈）、子代理运行中（**第二个**转圈点）、已完成未读（绿点）；**空闲时格子头部不出现任何标记**（§4.3b 的唯一有意偏差，侧栏那边是灰点）。绿点的清除时机按 §4.3b 的说明核对（本插件不负责清除，下一轮 `running` 才灭）。
 8. **持久化**：改动下拉里的勾选 → 刷新 → 选择仍在；拖动分界线改宽度 → 刷新 → **每格相对宽比不变**（§4.1 / §5.4）。
@@ -378,7 +381,10 @@ e.dataTransfer.setData('text/plain', node.id)   // node.id 就是 SessionId
 | `client.js` | 单文件 Client half（模块加载器只认这一个文件，所以缝只能是文件内的纯函数） |
 | `boot-check.mjs` | 冷启动守卫：真实 Cordis Context + 对照项，并断言 `main` 的 session 子槽与 board store |
 | `tests/seams.test.mjs` | `node --test` 覆盖 9 个纯函数缝（16 个用例）；`client.js` 的返回值多挂一个 `__test` 字段把这些缝暴露给测试（宿主只读 `inject` / `apply`，其余键被忽略） |
-| `tests/render.test.mjs` | 用**宿主的真 React + react-dom/server** 把面板渲染成静态 HTML（7 个用例）：状态标记、面包屑、每格工厂内容、分栏把手、宽度落到 flex、空态、缺 store 的降级路径。纯函数测试看不见 React 层，靠这一层补 |
+| `tests/render.test.mjs` | 用**宿主的真 React + react-dom/server** 把面板渲染成静态 HTML（9 个用例）：状态标记、面包屑、每格工厂内容、分栏把手、宽度落到 flex、空态、状态回落、缺 store 的降级路径。纯函数测试看不见 React 层，靠这一层补 |
+| `tests/interaction.test.mjs` | 把面板挂进 **jsdom + react-dom/client**，用真事件驱动（7 个用例）：× 关闭后停靠并可从顶栏放回（且 retain 未释放）、下拉勾选写 board、视图标签经工厂 seam 钉住 view、焦点标记、拖分界线（比例 + 380 夹紧 + 收尾）、头部拖动载荷与「从 × 起拖被拒」、轨道 drop 重排并拒收非会话负载 |
+| `tests/store.test.mjs` | 用**宿主的真 store 引擎**跑持久化（5 个用例）：键名与 root 无后缀、坏数据逐字段兜底、第二个实例恢复、无 localStorage 时的可用性 |
+| `tests/sidebar.test.mjs` / `tests/labels.test.mjs` | 折叠幂等（5 个）与措辞对齐宿主字典（5 个） |
 | `package.json` | `dsh.client.external` = store + primitives；`inject` = commands / conversation / layout；脚本 `test` / `boot-check` / `check` |
 
 **接线假设（已逐条对着宿主源码核实，不要再靠猜）**：
@@ -404,4 +410,4 @@ e.dataTransfer.setData('text/plain', node.id)   // node.id 就是 SessionId
 | `createSidebar(ctx)` | 折叠探针**唯一**所在地（§7.1，含"上游有 API 就换掉"的注释） |
 | `createBoardStore()` | `defineStore({persist:'dsh.mixer.v1'})`；store 不可用时退化到内存实现 |
 
-**验证**：`npm run check`（语法 + **40 个用例** + 冷启动）在本机全绿；**浏览器行为仍需用户按 §6 十条核对**（装根包、卸 `dsh-mixer-spike`、硬刷新）。
+**验证**：`npm run check`（语法 + **47 个用例** + 冷启动）在本机全绿；**浏览器行为仍需用户按 §6 十条核对**（装根包、卸 `dsh-mixer-spike`、硬刷新）。
