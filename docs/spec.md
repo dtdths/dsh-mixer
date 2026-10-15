@@ -266,8 +266,9 @@ e.dataTransfer.setData('text/plain', node.id)   // node.id 就是 SessionId
 
 ## 6. 验证清单（装完怎么确认生效）
 
-0. **先跑自动化**：`npm run check`（语法 + 16 个纯函数用例 + 冷启动守卫）。这一条绿了再动浏览器 —— 它覆盖的是"冷启动会炸整页"和"注册事实静默丢失"这两类只有跑起来才看得见的问题。
+0. **先跑自动化**：`npm run check`（语法 + 23 个用例：纯函数缝 + 真 React 静态渲染 + 冷启动守卫）。这一条绿了再动浏览器 —— 它覆盖的是"冷启动会炸整页"和"注册事实静默丢失"这两类只有跑起来才看得见的问题。
 1. **安装**：`plugin_manager` → `install_bundle`，target = **本包根目录**；确认返回 `application: applied` 且 `warnings` 为空。随后**把 `dsh-mixer-spike` 从 profile 卸掉**（否则原型与正式版同时注册 `main` 的 key、会话头按钮和 `/mixer`，行为不可预测）。
+   **验收判据（profile 文件）**：`~/.dsh/profiles/web/package.json` 里应当只剩 `"dsh-mixer": "link:/Users/user/Documents/code/d/dsh-mixer"` 这一条 mixer 依赖，且 `dsh.profile.bundles` 里只列 `dsh-mixer`、**不含** `dsh-mixer-spike`（装之前那里写的是 spike）。
 2. **冷启动**（关键，别用热重载代替）：**硬刷新**页面，确认**没有** `Failed to load plugins` / `web boot: N entry did not activate`。任何 `apply()` 改动都必须重做这一步。
 3. **入口**：会话头「打开目录」左侧出现切换按钮；在 composer 里敲 `/mixer` 也能进入。
 4. **并排**：每格渲染出官方 composer 与完整对话记录（不是空白，也不是只读快照）。
@@ -377,7 +378,17 @@ e.dataTransfer.setData('text/plain', node.id)   // node.id 就是 SessionId
 | `client.js` | 单文件 Client half（模块加载器只认这一个文件，所以缝只能是文件内的纯函数） |
 | `boot-check.mjs` | 冷启动守卫：真实 Cordis Context + 对照项，并断言 `main` 的 session 子槽与 board store |
 | `tests/seams.test.mjs` | `node --test` 覆盖 9 个纯函数缝（16 个用例）；`client.js` 的返回值多挂一个 `__test` 字段把这些缝暴露给测试（宿主只读 `inject` / `apply`，其余键被忽略） |
+| `tests/render.test.mjs` | 用**宿主的真 React + react-dom/server** 把面板渲染成静态 HTML（7 个用例）：状态标记、面包屑、每格工厂内容、分栏把手、宽度落到 flex、空态、缺 store 的降级路径。纯函数测试看不见 React 层，靠这一层补 |
 | `package.json` | `dsh.client.external` = store + primitives；`inject` = commands / conversation / layout；脚本 `test` / `boot-check` / `check` |
+
+**接线假设（已逐条对着宿主源码核实，不要再靠猜）**：
+
+| 假设 | 证据 |
+| --- | --- |
+| `external` 里那两个名字在运行时可解析 | 壳层的平台静态表就是 `react` / `react-dom` / `cordis` / `dsh-client-store` / `dsh-client-ui-slots` / `-primitives` / `-dockkit`（`packages/client/web/src/seed.ts:24-39`）；且它们不是 boot row，所以只加"可解析性"、不加图边（`modules/src/index.ts:493-522`） |
+| keyed 面板也能拿到 `useStore` / `actions` | 组件注册（非 factory）走 `scoped-slots.tsx:568-572` 的 `host.storeOf(entry, …)`，声明了 store 就注入这两个 prop |
+| root 作用域 store 的 persist key **不加后缀** | `registry.ts:605-627`：`scope === 'root'` 时 `handle.create()` 不带 key，只有 session 实例才 `create(key)` |
+| factory 声明 `persist` 会抛错，handle 不会 | `registry.ts:650-651`：只有 factory store 的 `spec.persist` 被当成装配错误。本插件传的是 handle，所以安全 |
 
 **内部缝**（React 层只做渲染，判断全在这些纯函数里）：
 
@@ -386,11 +397,11 @@ e.dataTransfer.setData('text/plain', node.id)   // node.id 就是 SessionId
 | `channelState({pendingKind, running, subagents, completed})` | 五档优先级与配对（§4.3b），返回 `key` + 点描述 |
 | `visiblePendingKind(entry)` | 等待 kind 白名单 |
 | `runningSubagentCount(catalog, isRunning)` / `subagentCatalogOf(list, id)` | 子代理计数 |
-| `normalizeBoard(raw)` | 持久化坏数据回落（§4.1） |
+| `normalizeBoard(raw)` | 持久化坏数据回落（§4.1）；**保留所有合法权重**（× 移出的通道回来还按原比例） |
 | `moveChannel(current, id, index)` | 拖放的插入位修正（头部排序 + 侧栏拖入同一条路径） |
 | `resizedWeights(drag, clientX)` | 拖宽的比例换算与 380px 夹紧 |
 | `crumbsFor(summaries, id)` | 面包屑上溯（6 级上限 + 环保护） |
 | `createSidebar(ctx)` | 折叠探针**唯一**所在地（§7.1，含"上游有 API 就换掉"的注释） |
 | `createBoardStore()` | `defineStore({persist:'dsh.mixer.v1'})`；store 不可用时退化到内存实现 |
 
-**验证**：`npm run check`（语法 + 16 个用例 + 冷启动）在本机全绿；**浏览器行为仍需用户按 §6 十条核对**（装根包、卸 `dsh-mixer-spike`、硬刷新）。
+**验证**：`npm run check`（语法 + **23 个用例** + 冷启动）在本机全绿；**浏览器行为仍需用户按 §6 十条核对**（装根包、卸 `dsh-mixer-spike`、硬刷新）。
