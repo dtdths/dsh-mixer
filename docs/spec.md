@@ -283,6 +283,10 @@ e.dataTransfer.setData('text/plain', node.id)   // node.id 就是 SessionId
 10. **退出**：点「常规视图」或左侧会话行 → 回到常规，滚动位置与草稿仍在；侧栏恢复原状。
 11. **不要继承原型的结论**：这份清单现在跑的**就是根包**（`feat/mixer-v1`）。原型时期的通过记录只说明机制可行，不能当成这十条的验收 —— 尤其第 2 条和"并排/独立"两条。
 
+**验收记录（2026-10-15，用户实测）**：在根包（`feat/mixer-v1` @ `5c8314b`，profile `web` 只装 `dsh-mixer`）上完成 —— 硬刷新冷启动**没有** `Failed to load plugins` / `web boot: N entry did not activate`；第 3–10 条逐条通过（含五档状态与左侧会话行逐档一致、持久化、归档联动、退出复原）。
+
+agent 侧可复核的旁证（**只证明注册事实，不替代本清单的观感项**）：`npm run check` = 53/53 + 冷启动守卫 `PASS`；live 页里 `main` 的 `mixer` occupant `active:true`、`conversation.session.header.utilities` 的 `mixer-toggle`（label 调音台，order −20）`active:true`、子槽 `mixer.channel` 已声明。
+
 ## 7. 宿主限制与规避（必读）
 
 ### 7.1 侧栏无法归零
@@ -361,7 +365,7 @@ e.dataTransfer.setData('text/plain', node.id)   // node.id 就是 SessionId
 - **侧栏折叠状态需 layout API**（§7.1）。
 - **`completionUnread` 绿点在本插件里不会被"看过"清除**（§4.3b 语义陷阱）：v1 接受该语义；若日后不可接受，备选是插件自持一份 seen 集合、只在插件内算未读。
 - **UI 文案 locale 服务**：二期再查宿主 locale 服务的用法（宿主文案表如 `ui-workspace/src/client/locales.ts` 是 per-package 的）。
-- **spike → 正式包的迁移**：**已完成**（分支 `feat/mixer-v1`，见 §11）；剩下要用户做的只有「装根包 → 卸 spike → 硬刷新重跑 §6」。**§6 的清单必须在根包上重跑**（第 4 轮就是"热重载正常、冷启动炸整页"）。
+- **spike → 正式包的迁移**：**已完成**（分支 `feat/mixer-v1`，见 §11），并且**已在根包上重跑 §6** —— 2026-10-15 用户实测验收通过（见 §6 验收记录；要防的第 4 轮那个"热重载正常、冷启动炸整页"没有复现）。`spike/` 工作区目录与 profile 里那条 `dsh-mixer-spike` 软链均已清除；原型本体仍在 `spike/mixer-two-pane` 分支上。
 - 更远的增强想法集中在 [issue #12](https://github.com/dtdths/dsh-mixer/issues/12)（`needs-triage`：通道间跳转 / solo 快捷键、solo/mute 持久化、多条待审批计数需上游、跨 workspace 混排…）。
 
 ## 10. 原型资产（`spike/mixer-two-pane` 分支）
@@ -420,4 +424,4 @@ DSH_REPO=/新的/checkout 路径 npm run check
 | `createSidebar(ctx)` | 折叠探针**唯一**所在地（§7.1，含"上游有 API 就换掉"的注释） |
 | `createBoardStore()` | `defineStore({persist:'dsh.mixer.v1'})`；store 不可用时退化到内存实现 |
 
-**验证**：`npm run check`（语法 + **53 个用例** + 冷启动）在本机全绿；**浏览器行为仍需用户按 §6 十条核对**（装根包、卸 `dsh-mixer-spike`、硬刷新）。
+**验证**：`npm run check`（语法 + **53 个用例** + 冷启动）在本机全绿；**浏览器行为已由用户按 §6 十条在根包上验收通过**（2026-10-15，装根包 + 卸 `dsh-mixer-spike` + 硬刷新；见 §6 验收记录）。
