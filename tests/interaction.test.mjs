@@ -419,6 +419,53 @@ test('interaction: a running Session asks before archiving, then stops and archi
   assert.equal(ui.$('[data-mixer-archive-confirm="s2"]'), null)
 })
 
+test('interaction: an archive that THROWS or is missing says so, never a dead click (§5.2)', async () => {
+  const ui = await mountTwo()
+  const { act, window } = ui
+  const hover = (element, type) => act(() => { element.dispatchEvent(new window.MouseEvent(type, { bubbles: true })) })
+  act(() => { ui.$('[data-mixer-sessions]').dispatchEvent(new window.MouseEvent('click', { bubbles: true })) })
+
+  /* A service that throws synchronously is the exact shape of "I clicked and nothing
+     happened" — it must surface in the bar, not only in the console. */
+  ui.host.setArchiveThrow(new TypeError('ctx.uiWorkspace.archiveSession is not a function'))
+  hover(ui.$('[data-mixer-session="s2"]'), 'mouseover')
+  act(() => { ui.$('[data-mixer-archive="s2"]').dispatchEvent(new window.MouseEvent('click', { bubbles: true })) })
+  assert.match(ui.$('[data-mixer-notice]').textContent, /archiveSession is not a function/)
+
+  /* And if the action is not even wired, the panel says which piece is missing. */
+  ui.host.setArchiveThrow(undefined)
+  ui.draw({})
+  act(() => { ui.$('[data-mixer-sessions]').dispatchEvent(new window.MouseEvent('click', { bubbles: true })) })
+  const stripped = await loadInteractive()
+  stripped.draw({ board: { channels: ['s1'], weights: {} }, list, status, workspaces })
+  /* Strip the injected action the way a host contract change would. */
+  const injected = stripped.host.main.options.inject()
+  delete injected.archiveSession
+  stripped.host.main.options.inject = () => injected
+  stripped.draw({})
+  act(() => { stripped.$('[data-mixer-sessions]').dispatchEvent(new window.MouseEvent('click', { bubbles: true })) })
+  hover(stripped.$('[data-mixer-session="s1"]'), 'mouseover')
+  act(() => { stripped.$('[data-mixer-archive="s1"]').dispatchEvent(new window.MouseEvent('click', { bubbles: true })) })
+  assert.match(stripped.$('[data-mixer-notice]').textContent, /没有提供 archiveSession/)
+})
+
+test('interaction: an in-flight archive shows 归档中… instead of looking inert (§5.2)', async () => {
+  const ui = await mountTwo()
+  const { act, window } = ui
+  const hover = (element, type) => act(() => { element.dispatchEvent(new window.MouseEvent(type, { bubbles: true })) })
+  ui.host.setArchiveDelay(40)
+  act(() => { ui.$('[data-mixer-sessions]').dispatchEvent(new window.MouseEvent('click', { bubbles: true })) })
+  hover(ui.$('[data-mixer-session="s2"]'), 'mouseover')
+  act(() => { ui.$('[data-mixer-archive="s2"]').dispatchEvent(new window.MouseEvent('click', { bubbles: true })) })
+
+  const pending = ui.$('[data-mixer-archive="s2"]')
+  assert.equal(pending.textContent, '归档中…')
+  assert.equal(pending.disabled, true)
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 80)) })
+  /* Settled: back to the resting label. */
+  assert.equal(ui.$('[data-mixer-archive="s2"]').textContent, '归档')
+})
+
 test('interaction: a view tab pins the view through the factory seam (§4.4)', async () => {
   const ui = await mountTwo()
   const { act, window } = ui

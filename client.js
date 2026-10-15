@@ -615,8 +615,8 @@ window.__ModuleLoader__.load({
       rowAction: {
         flex: '0 0 auto', font: `11.5px/1.5 ${SANS}`, padding: '2px 8px', cursor: 'pointer',
         borderRadius: PILL, color: T.fg2, background: T.l2, border: `1px solid ${T.b1}`,
-      },
-      rowActionPrimary: { color: T.fg, background: T.l2, border: `1px solid ${T.b2}`, fontWeight: 600 },
+      },      rowActionPrimary: { color: T.fg, background: T.l2, border: `1px solid ${T.b2}`, fontWeight: 600 },
+      rowActionPending: { color: T.fg2, cursor: 'default', opacity: 0.7 },
       rowConfirm: {
         display: 'flex', alignItems: 'center', gap: 6, padding: '4px 7px 6px',
         font: `11.5px/1.6 ${SANS}`, color: T.fg2,
@@ -776,7 +776,7 @@ window.__ModuleLoader__.load({
       const {
         onClose, workspaces, sessions, channels, parked, attention,
         landingId, landingTitle, onPickLanding, onToggleChannel, onNewSession,
-        archived, onArchive, onStopAndArchive, archiveConfirm, onDismissArchive,
+        archived, onArchive, onStopAndArchive, archiveConfirm, archivePending, onDismissArchive,
       } = props
       const [query, setQuery] = useState('')
       /* Which row the pointer is on: the archive action only appears on hover, and there
@@ -887,11 +887,15 @@ window.__ModuleLoader__.load({
                                 ),
                                 hovered
                                   ? h('button', {
-                                      style: CSS.rowAction,
+                                      type: 'button',
+                                      style: archivePending === sessionId
+                                        ? { ...CSS.rowAction, ...CSS.rowActionPending }
+                                        : CSS.rowAction,
                                       'data-mixer-archive': sessionId,
+                                      disabled: archivePending === sessionId,
                                       title: '归档这个会话（与侧边栏的归档一致；正在执行的会话会先问一次）',
                                       onClick: () => onArchive(sessionId),
-                                    }, '归档')
+                                    }, archivePending === sessionId ? '归档中…' : '归档')
                                   : null,
                               ),
                               confirming
@@ -935,7 +939,7 @@ window.__ModuleLoader__.load({
         attention, backToConversation,
         workspaces, sessions, landingId, landingTitle,
         onPickLanding, onToggleChannel, onNewSession, onPanelOpened, notice,
-        archived, onArchive, onStopAndArchive, archiveConfirm, onDismissArchive,
+        archived, onArchive, onStopAndArchive, archiveConfirm, archivePending, onDismissArchive,
       } = props
       const [panelOpen, setPanelOpen] = useState(false)
       const waitingCount = channels.filter(id => attention[id] !== undefined).length
@@ -978,7 +982,7 @@ window.__ModuleLoader__.load({
                 onClose: () => setPanelOpen(false),
                 workspaces, sessions, channels, parked, attention,
                 landingId, landingTitle, onPickLanding, onToggleChannel,
-                archived, onArchive, onStopAndArchive, archiveConfirm, onDismissArchive,
+                archived, onArchive, onStopAndArchive, archiveConfirm, archivePending, onDismissArchive,
                 onNewSession: () => { setPanelOpen(false); onNewSession() },
               })
             : null),
@@ -1403,6 +1407,9 @@ window.__ModuleLoader__.load({
       const [notice, setNotice] = useState(undefined)
       /* The pending "this Session is running, stop it and archive?" offer. */
       const [archiveConfirm, setArchiveConfirm] = useState(undefined)
+      /* The row whose archive call is in flight, so the action shows 归档中… instead of
+         looking like a click that did nothing. */
+      const [archivePending, setArchivePending] = useState(undefined)
       /* "Insert this Session first" is handed over by the apply-scope reclaim watcher:
          the panel those channels belonged to has just been unmounted. */
       const pendingRef = useRef(null)
@@ -1610,26 +1617,50 @@ window.__ModuleLoader__.load({
       }
       /* Archiving from the panel goes through the same service call the sidebar's row
          action uses. The Host refuses while work is running; that refusal becomes an
-         inline "stop and archive" offer rather than a dead click. */
+         inline "stop and archive" offer rather than a dead click.
+         EVERY failure mode is reported in the bar — including a synchronous throw and a
+         service that is not there at all. "Click, nothing happens" was the reported
+         symptom once already; a handler that only logs to the console is exactly how
+         that reads from the user's side. */
       const archiveChannel = (sessionId) => {
         setNotice(undefined)
         setArchiveConfirm(undefined)
-        void archiveSession(sessionId).then(
-          () => {},
+        if (typeof archiveSession !== 'function') {
+          setNotice('归档不可用：宿主没有提供 archiveSession')
+          return
+        }
+        setArchivePending(sessionId)
+        runArchive(sessionId, undefined)
+      }
+      const stopAndArchiveChannel = (sessionId) => {
+        setNotice(undefined)
+        setArchiveConfirm(undefined)
+        setArchivePending(sessionId)
+        runArchive(sessionId, { stopActivity: true })
+      }
+      const runArchive = (sessionId, options) => {
+        let attempt
+        try {
+          attempt = archiveSession(sessionId, options)
+        } catch (error) {
+          console.error('[mixer] archive call threw', error)
+          setArchivePending(undefined)
+          setNotice(`归档失败：${errorText(error)}`)
+          return
+        }
+        Promise.resolve(attempt).then(
+          () => { setArchivePending(undefined) },
           (reason) => {
-            if (archiveActivityOf(reason) === undefined) {
+            setArchivePending(undefined)
+            /* A follow-up "stop and archive" failure is a plain failure: asking again
+               would loop. */
+            if (options !== undefined || archiveActivityOf(reason) === undefined) {
+              console.error('[mixer] archive rejected', reason)
               setNotice(`归档失败：${errorText(reason)}`)
               return
             }
             setArchiveConfirm({ sessionId })
           },
-        )
-      }
-      const stopAndArchiveChannel = (sessionId) => {
-        setArchiveConfirm(undefined)
-        void archiveSession(sessionId, { stopActivity: true }).then(
-          () => {},
-          (reason) => { setNotice(`归档失败：${errorText(reason)}`) },
         )
       }
       /* One path for both drag gestures: a channel head dragged inside the track and a
@@ -1691,7 +1722,12 @@ window.__ModuleLoader__.load({
           landingTitle: landingItem === undefined ? undefined : landingItem.title,
           /* Each open starts from the derived landing, and drops a stale failure note:
              the note is about one attempt, not about the bar's steady state. */
-          onPanelOpened: () => { setLanding(undefined); setNotice(undefined); setArchiveConfirm(undefined) },
+          onPanelOpened: () => {
+            setLanding(undefined)
+            setNotice(undefined)
+            setArchiveConfirm(undefined)
+            setArchivePending(undefined)
+          },
           onPickLanding: (workspaceId) => setLanding(workspaceId),
           onToggleChannel: toggleChannel,
           onNewSession: createChannel,
@@ -1699,6 +1735,7 @@ window.__ModuleLoader__.load({
           onArchive: archiveChannel,
           onStopAndArchive: stopAndArchiveChannel,
           archiveConfirm: archiveConfirm === undefined ? undefined : archiveConfirm.sessionId,
+          archivePending,
           onDismissArchive: () => setArchiveConfirm(undefined),
           notice,
         }),

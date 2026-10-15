@@ -204,6 +204,7 @@ renderFactorySlot('conversation.content', input, { slots: { views: Views } })
 
   - **已归档的会话不列出（2026-10-15 第四轮，用户反馈）**：右列按宿主 `WorkspacesSnapshot.archivedSessionIds` 过滤，与侧边栏一致 —— 归档行本来就不可打开，之前留在面板里只会得到一次"点了没反应"。过滤只作用于**列表**，不影响已在通道里的会话（那种情况由 §4.1 的自动移除处理）。
   - **悬停行尾出「归档」（2026-10-15 第四轮，用户要求）**：指针移入某行时行尾出现 `归档` 按钮（`data-mixer-archive="<id>"`，行本身 `data-mixer-session`，选通道的勾选/点击区收在 `data-mixer-pick` 里，所以两个动作不会互相误触）。它调的是**侧边栏行动作用的同一个服务**：`ctx.uiWorkspace.archiveSession(sessionId)`（`navigation.ts:272`）；若该会话正在通道里打开，**无需插件额外操作**——归档落进 `workspaces` 快照后由 §4.1 的自动移除关掉那一格。
+  - **归档的每一种失败都必须可见（2026-10-15 第五轮）**：用户报"归档按钮点击无效"，而当时处理器只在 console 里失败（同步抛错连 notice 都不会出）。现在三条路都有出口 —— 同步抛错、promise 拒绝、以及**宿主根本没提供 `archiveSession`** —— 全部落到顶栏提示；调用进行中该行显示 `归档中…` 并禁用。教训写在这里：**事件处理器里只 `console.error` 就等于"点了没反应"**。
   - **正在执行的会话先问一次（2026-10-15 第四轮）**：宿主对"有正在跑的工作"会拒绝归档（`workspace/session-active`）。插件的处理与侧边栏同判据：按**错误名**识别（`WorkspaceArchiveError`，客户端插件包不共享错误类身份，见 ui-workspace `index.ts:326`；纯函数缝 `archiveActivityOf` 钉住），然后在**该行下方**给一条内联确认：「这个会话正在执行，归档会先停止它」+ `停止并归档`（`archiveSession(id, { stopActivity: true })`）+ `取消`。宿主的 toast / 确认弹窗是 ui-workspace 私有的，所以这段 UI 由插件自己画；其它失败一律进顶栏提示（`data-mixer-notice`）。
 - **不加独立的 `＋` 按钮**（用户 2026-10-15 决定）：新建仍从 `会话` 浮层底部进入，避免顶栏多一个语义相近的控件。
 - 触发器的文案是 `会话`，有通道时追加数量（`会话 · 3`）；浮层右列按工作区分组、搜索框是 `type="search"`、底部夹一条 `勾选即加入通道`（搜索时变成 `过滤：<词>`）的提示行——这三处是实现时顺手补的可读性细节，不影响上面任何决定。
@@ -305,7 +306,7 @@ e.dataTransfer.setData('text/plain', node.id)   // node.id 就是 SessionId
 
 ## 6. 验证清单（装完怎么确认生效）
 
-0. **先跑自动化**：`npm run check`（语法 + **73 个用例**：纯函数缝 + 真 store 引擎 + 真 React（静态渲染与 jsdom 交互）+ 侧栏折叠 seam + 措辞对齐 + 宿主契约漂移哨兵 + 冷启动守卫）。这一条绿了再动浏览器 —— 它覆盖的是"冷启动会炸整页"和"注册事实静默丢失"这两类只有跑起来才看得见的问题。
+0. **先跑自动化**：`npm run check`（语法 + **75 个用例**：纯函数缝 + 真 store 引擎 + 真 React（静态渲染与 jsdom 交互）+ 侧栏折叠 seam + 措辞对齐 + 宿主契约漂移哨兵 + 冷启动守卫）。这一条绿了再动浏览器 —— 它覆盖的是"冷启动会炸整页"和"注册事实静默丢失"这两类只有跑起来才看得见的问题。
 1. **安装**：`plugin_manager` → `install_bundle`，target = **本包根目录**；确认返回 `application: applied` 且 `warnings` 为空。随后**把 `dsh-mixer-spike` 从 profile 卸掉**（否则原型与正式版同时注册 `main` 的 key、会话头按钮和 `/mixer`，行为不可预测）。
    **验收判据（profile 文件）**：`~/.dsh/profiles/web/package.json` 里应当只剩 `"dsh-mixer": "link:/Users/user/Documents/code/d/dsh-mixer"` 这一条 mixer 依赖，且 `dsh.profile.bundles` 里只列 `dsh-mixer`、**不含** `dsh-mixer-spike`（装之前那里写的是 spike）。
 2. **冷启动**（关键，别用热重载代替）：**硬刷新**页面，确认**没有** `Failed to load plugins` / `web boot: N entry did not activate`。任何 `apply()` 改动都必须重做这一步。
@@ -433,6 +434,7 @@ agent 侧可复核的旁证（**只证明注册事实，不替代本清单的观
 | 2 | 顶栏 `会话`、`调音台`、视图切换按钮字太小，`会话` 没有按钮样式 | 顶栏升到 13px 档（标签 13.5/600、chip 11.5px）；`会话` 静止即带底色描边；每格视图标签 13px | §5.2 / §5.3 / §6.17 |
 | 3 | `会话` 两级菜单字偏小；点左列工作区时期望右列滚到对应分组 | 浮层字号升到 13px 档（分组标题 12px、列宽 196/344）；左列兼作跳转表（`data-mixer-group` + `scrollIntoView`） | §5.2 / §6.18 |
 | 4 | 已归档的会话仍列在浮层里、点了没反应 | 右列按 `archivedSessionIds` 过滤，与侧边栏一致 | §5.2 / §6.19 |
+| 6 | 归档按钮"点击无效"（浏览器实测） | 堵住静默失败：同步抛错 / 未提供 `archiveSession` / 拒绝 三条路都出顶栏提示，进行中显示 `归档中…` | §5.2 |
 | 5 | 悬停会话行时希望有归档按钮，且归档后在通道里打开的那一格要关掉 | 行尾 hover 出 `归档` → `ctx.uiWorkspace.archiveSession`（与侧边栏同一调用）；正在执行则按错误名识别拒绝、行内确认"停止并归档"；通道由 §4.1 自动移除关掉 | §5.2 / §6.20 |
 
 ### 9.1 仍开放
@@ -467,7 +469,7 @@ agent 侧可复核的旁证（**只证明注册事实，不替代本清单的观
 | `boot-check.mjs` | 冷启动守卫：真实 Cordis Context + 对照项，并断言 `main` 的 session 子槽与 board store |
 | `tests/seams.test.mjs` | `node --test` 覆盖 15 个纯函数缝 + 1 张文案表（21 个用例）；`client.js` 的返回值多挂一个 `__test` 字段把这些缝暴露给测试（宿主只读 `inject` / `apply`，其余键被忽略） |
 | `tests/render.test.mjs` | 用**宿主的真 React + react-dom/server** 把面板渲染成静态 HTML（10 个用例）：状态标记、面包屑、每格工厂内容、分栏把手、宽度落到 flex、空态、状态回落、**空会话必须拿到 hero 相位**、缺 store 的降级路径。纯函数测试看不见 React 层，靠这一层补 |
-| `tests/interaction.test.mjs` | 把面板挂进 **jsdom + react-dom/client**，用真事件驱动（21 个用例）：× 关闭后停靠并可从顶栏放回（且 retain 未释放）、`会话` 浮层勾选写 board 与本地标题过滤、左列只改"新建落点"且不导航、**新建走 `ctx.sessions.create` 并置顶 + 光标落在新格**、**刚新建完的主动离开不被抢回**、**复用同工作区空白会话**、**宿主入口的窄条件抢回（主动离开不抢）**、`Esc`/再点触发器/点浮层外三种关闭、**顶栏不出现工作区名而面板里出现**、**新建失败在顶栏可见**、**光标交接等迟到的 composer**、**触发器要有按钮样式**、**点左列工作区滚动右列**、**归档会话不在列表里**、**悬停出行尾归档且归档后该格关掉**、**正在执行先问一次再停止并归档**、视图标签经工厂 seam 钉住 view、焦点标记、拖分界线（比例 + 380 夹紧 + 收尾）、头部拖动载荷（含**整格虚影** `setDragImage` 与 `.4` 占位）与「从 × 起拖被拒」、轨道 drop 重排并拒收非会话负载、**拖动时同宽空槽（让位）** |
+| `tests/interaction.test.mjs` | 把面板挂进 **jsdom + react-dom/client**，用真事件驱动（23 个用例）：× 关闭后停靠并可从顶栏放回（且 retain 未释放）、`会话` 浮层勾选写 board 与本地标题过滤、左列只改"新建落点"且不导航、**新建走 `ctx.sessions.create` 并置顶 + 光标落在新格**、**刚新建完的主动离开不被抢回**、**复用同工作区空白会话**、**宿主入口的窄条件抢回（主动离开不抢）**、`Esc`/再点触发器/点浮层外三种关闭、**顶栏不出现工作区名而面板里出现**、**新建失败在顶栏可见**、**光标交接等迟到的 composer**、**触发器要有按钮样式**、**点左列工作区滚动右列**、**归档会话不在列表里**、**悬停出行尾归档且归档后该格关掉**、**正在执行先问一次再停止并归档**、**归档抛错/缺 API 都要出提示**、**归档进行中显示"归档中…"**、视图标签经工厂 seam 钉住 view、焦点标记、拖分界线（比例 + 380 夹紧 + 收尾）、头部拖动载荷（含**整格虚影** `setDragImage` 与 `.4` 占位）与「从 × 起拖被拒」、轨道 drop 重排并拒收非会话负载、**拖动时同宽空槽（让位）** |
 | `tests/store.test.mjs` | 用**宿主的真 store 引擎**跑持久化（5 个用例）：键名与 root 无后缀、坏数据逐字段兜底、第二个实例恢复、无 localStorage 时的可用性 |
 | `tests/sidebar.test.mjs` / `tests/labels.test.mjs` | 折叠幂等（5 个）与措辞对齐宿主字典（5 个） |
 | `tests/host-contract.test.mjs` | **宿主契约漂移哨兵**（6 个）：`external` 的名字仍在该 checkout 的平台静态表与 seed 表里、`inject` 每条边都指向真实存在的包、slot 注册仍提供 `store` 与 session 子槽座位、root store 仍以无 key 方式实例化、侧栏行状态的四个事实与三种 kind 仍在、轮次导航仍由容器查询隐藏。其中前两条是真检查（能真失败），其余是锚点检查（命中 = 机制还在，不等于行为不变） |
@@ -512,7 +514,7 @@ DSH_REPO=/新的/checkout 路径 npm run check
 
 另有三条行为常量，**只在文档与代码注释里约定、不进 `__test`**（它们不是判断，是时序参数，钉一个数字等于写同义反复）：`FOCUS_RETRY_FRAMES = 30`（光标交接等宿主 composer 出现的帧数上限，§5.1③）、`RECLAIM_WINDOW_MS = 2000`（抢回判据的时效窗，§5.1）与 `HERO_LIFT_PX = 48`（空会话 hero 的光学上调，§4.4）。
 
-后 4 条是 2026-10-15 第二轮新增（需求 1 / 2 / 4）。**用例数已落地**：v1 的 53 例 + 第二轮 15 例 = **68 例**全绿（`seams` +4、`render` +1、`interaction` +10）；第三轮再 +1（`interaction` 的「触发器要有按钮样」）；第四轮 +4（`seams` 的 `archiveActivityOf` + `interaction` 的归档过滤 / 悬停归档 / 停止并归档）= **73 例**。`tests/harness.mjs` 的假宿主已补齐 `ctx.sessions.create` 的记录、`sessions.list` / `layout.panelInfo` 两个可订阅源（含 `setList` / `setPanelInfo` 驱动），并且 `useStore` 改成真的订阅 + 版本号重渲染——原来只读快照，导致"面板自己的写入"在测试里根本不会触发重渲染，`×` 关闭那条用例是靠别的原因才过的。
+后 4 条是 2026-10-15 第二轮新增（需求 1 / 2 / 4）。**用例数已落地**：v1 的 53 例 + 第二轮 15 例 = **68 例**全绿（`seams` +4、`render` +1、`interaction` +10）；第三轮再 +1（`interaction` 的「触发器要有按钮样」）；第四轮 +4（`seams` 的 `archiveActivityOf` + `interaction` 的归档过滤 / 悬停归档 / 停止并归档）；第五轮 +2（归档同步抛错 / 未提供 `archiveSession` 都要出提示，以及 `归档中…` 的进行中态）= **75 例**。`tests/harness.mjs` 的假宿主已补齐 `ctx.sessions.create` 的记录、`sessions.list` / `layout.panelInfo` 两个可订阅源（含 `setList` / `setPanelInfo` 驱动），并且 `useStore` 改成真的订阅 + 版本号重渲染——原来只读快照，导致"面板自己的写入"在测试里根本不会触发重渲染，`×` 关闭那条用例是靠别的原因才过的。
 
 **验证**：`npm run check`（语法 + **53 个用例** + 冷启动）在本机全绿；**浏览器行为已由用户按 §6 十条在根包上验收通过**（2026-10-15，装根包 + 卸 `dsh-mixer-spike` + 硬刷新；见 §6 验收记录）。
-**第二轮（需求 1–4）实现后的验证**：`npm run check` = **73 个用例全绿** + 冷启动 `PASS`（2026-10-15）；**§6 第 12–20 条属观感项，由用户在浏览器里逐条验收** —— 尤其"整格虚影"与"让位"两处只有真拖拽能验。
+**第二轮（需求 1–4）实现后的验证**：`npm run check` = **75 个用例全绿** + 冷启动 `PASS`（2026-10-15）；**§6 第 12–20 条属观感项，由用户在浏览器里逐条验收** —— 尤其"整格虚影"与"让位"两处只有真拖拽能验。

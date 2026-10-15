@@ -184,6 +184,8 @@ export function createHost(definition, { viewEntries = DEFAULT_VIEW_ENTRIES } = 
   const archiveCalls = []
   let createFailure
   let archiveFailure
+  let archiveThrows
+  let archiveDelayMs = 0
   const listListeners = new Set()
   const panelListeners = new Set()
   const disposers = []
@@ -249,6 +251,16 @@ export function createHost(definition, { viewEntries = DEFAULT_VIEW_ENTRIES } = 
     uiWorkspace: {
       archiveSession: (sessionId, options) => {
         archiveCalls.push({ sessionId, options })
+        /* A service that THROWS instead of rejecting: the "click does nothing" class. */
+        if (archiveThrows !== undefined) throw archiveThrows
+        if (archiveDelayMs > 0) {
+          return new Promise((resolve, reject) => {
+            setTimeout(() => {
+              if (archiveFailure !== undefined) reject(archiveFailure)
+              else resolve()
+            }, archiveDelayMs)
+          })
+        }
         if (archiveFailure !== undefined) return Promise.reject(archiveFailure)
         return Promise.resolve()
       },
@@ -262,6 +274,8 @@ export function createHost(definition, { viewEntries = DEFAULT_VIEW_ENTRIES } = 
     selectPanelCalls, createCalls, archiveCalls, setList, setPanelInfo,
     setCreateFailure: (error) => { createFailure = error },
     setArchiveFailure: (error) => { archiveFailure = error },
+    setArchiveThrow: (error) => { archiveThrows = error },
+    setArchiveDelay: (ms) => { archiveDelayMs = ms },
     panelInfo: () => panelInfoState,
     dispose: () => { for (const dispose of disposers) dispose() },
   }
