@@ -390,6 +390,27 @@ window.__ModuleLoader__.load({
     }
 
     /**
+     * The activity a Host archive refusal reported, or undefined when the failure was
+     * something else. Mirror of ui-workspace's own `activeSessionRefusal`
+     * (`index.ts:326`), including its reason for going by NAME: client plugin bundles do
+     * not share error-class identity, so `instanceof` against the host's class would
+     * never match.
+     * @param reason - whatever the archive promise rejected with.
+     * @returns `[]`/activities when the Host refused because work is running, else
+     *   undefined (a plain failure).
+     */
+    function archiveActivityOf(reason) {
+      if (!(reason instanceof Error) || reason.name !== 'WorkspaceArchiveError') return undefined
+      const rpcError = reason.rpcError
+      if (rpcError === undefined || rpcError === null || rpcError.code !== 'workspace/session-active') {
+        return undefined
+      }
+      const details = rpcError.details
+      if (details === undefined || details === null || details.activity === undefined) return []
+      return Array.isArray(details.activity) ? details.activity : []
+    }
+
+    /**
      * The sidebar's row state for one Session, as one pure function: the whole
      * precedence lives here, so the pane header, the top-bar summary and the tests
      * cannot drift apart.
@@ -582,8 +603,23 @@ window.__ModuleLoader__.load({
         background: T.l1, color: T.fg, border: `1px solid ${T.b1}`, outline: 'none',
       },
       sessionRow: {
-        display: 'flex', alignItems: 'center', gap: 7, padding: '4px 7px', cursor: 'pointer',
+        display: 'flex', alignItems: 'center', gap: 7, padding: '4px 7px',
         font: `13px/1.6 ${SANS}`, borderRadius: SURFACE,
+      },
+      sessionRowOn: { background: T.l1 },
+      sessionPick: {
+        display: 'flex', alignItems: 'center', gap: 7, flex: 1, minWidth: 0, cursor: 'pointer',
+      },
+      /* The hover-only archive action (round 4): a quiet text button, same vocabulary as
+         the row tag, so the row does not grow a toolbar. */
+      rowAction: {
+        flex: '0 0 auto', font: `11.5px/1.5 ${SANS}`, padding: '2px 8px', cursor: 'pointer',
+        borderRadius: PILL, color: T.fg2, background: T.l2, border: `1px solid ${T.b1}`,
+      },
+      rowActionPrimary: { color: T.fg, background: T.l2, border: `1px solid ${T.b2}`, fontWeight: 600 },
+      rowConfirm: {
+        display: 'flex', alignItems: 'center', gap: 6, padding: '4px 7px 6px',
+        font: `11.5px/1.6 ${SANS}`, color: T.fg2,
       },
       rowWarnDot: { width: 7, height: 7, flex: '0 0 auto', borderRadius: PILL, background: T.warn },
       rowTag: {
@@ -740,8 +776,12 @@ window.__ModuleLoader__.load({
       const {
         onClose, workspaces, sessions, channels, parked, attention,
         landingId, landingTitle, onPickLanding, onToggleChannel, onNewSession,
+        archived, onArchive, onStopAndArchive, archiveConfirm, onDismissArchive,
       } = props
       const [query, setQuery] = useState('')
+      /* Which row the pointer is on: the archive action only appears on hover, and there
+         is no stylesheet to do that with (spec §5.2). */
+      const [hoverId, setHoverId] = useState(undefined)
       const needle = query.trim()
       /* The right column scrolls to the workspace picked on the left (round 3: 左列同时
          当跳转表用) — the two columns are one control, not two. */
@@ -761,6 +801,9 @@ window.__ModuleLoader__.load({
          recorded as phase 2 (spec §9.1). */
       const matches = sessionId => needle === ''
         || String((sessions[sessionId] === undefined ? '' : sessions[sessionId].displayTitle) ?? '').includes(needle)
+      /* Archived Sessions are hidden, exactly like the sidebar hides them (round 4):
+         they are not openable and must not be pickable as channels. */
+      const usable = sessionId => archived.indexOf(sessionId) === -1 && matches(sessionId)
 
       return h(React.Fragment, null,
         h('div', { style: CSS.backdrop, onClick: onClose }),
@@ -807,7 +850,7 @@ window.__ModuleLoader__.load({
               workspaces.length === 0
                 ? h('div', { style: CSS.panelEmpty }, '还没有工作区')
                 : workspaces.map(workspace => {
-                    const ids = (workspace.sessionIds || []).filter(matches)
+                    const ids = (workspace.sessionIds || []).filter(usable)
                     return h('div', { key: workspace.workspaceId, 'data-mixer-group': workspace.workspaceId },
                       h('div', { style: CSS.panelGroup }, workspace.title),
                       ids.length === 0
@@ -817,23 +860,55 @@ window.__ModuleLoader__.load({
                             const summary = sessions[sessionId]
                             const checked = channels.indexOf(sessionId) !== -1
                             const isParked = parked.indexOf(sessionId) !== -1
-                            return h('label', {
-                              key: sessionId,
-                              style: CSS.sessionRow,
-                              'data-mixer-session': sessionId,
-                            },
-                              h('input', {
-                                type: 'checkbox',
-                                checked,
-                                onChange: () => onToggleChannel(sessionId),
-                              }),
-                              attention[sessionId] === undefined
-                                ? null
-                                : h('span', { style: CSS.rowWarnDot, title: '这个通道在等你' }),
-                              h('span', {
-                                style: { flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
-                              }, summary === undefined ? sessionId.slice(0, 8) : summary.displayTitle),
-                              isParked ? h('span', { style: CSS.rowTag }, '已移出') : null,
+                            const hovered = hoverId === sessionId
+                            const confirming = archiveConfirm === sessionId
+                            return h('div', { key: sessionId },
+                              h('div', {
+                                style: { ...CSS.sessionRow, ...(hovered ? CSS.sessionRowOn : null) },
+                                'data-mixer-session': sessionId,
+                                onMouseEnter: () => setHoverId(sessionId),
+                                onMouseLeave: () => setHoverId(current => (current === sessionId ? undefined : current)),
+                              },
+                                /* The pick target is its own label, so the archive button
+                                   beside it cannot toggle the checkbox by accident. */
+                                h('label', { style: CSS.sessionPick, 'data-mixer-pick': sessionId },
+                                  h('input', {
+                                    type: 'checkbox',
+                                    checked,
+                                    onChange: () => onToggleChannel(sessionId),
+                                  }),
+                                  attention[sessionId] === undefined
+                                    ? null
+                                    : h('span', { style: CSS.rowWarnDot, title: '这个通道在等你' }),
+                                  h('span', {
+                                    style: { flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+                                  }, summary === undefined ? sessionId.slice(0, 8) : summary.displayTitle),
+                                  isParked ? h('span', { style: CSS.rowTag }, '已移出') : null,
+                                ),
+                                hovered
+                                  ? h('button', {
+                                      style: CSS.rowAction,
+                                      'data-mixer-archive': sessionId,
+                                      title: '归档这个会话（与侧边栏的归档一致；正在执行的会话会先问一次）',
+                                      onClick: () => onArchive(sessionId),
+                                    }, '归档')
+                                  : null,
+                              ),
+                              confirming
+                                ? h('div', { style: CSS.rowConfirm, 'data-mixer-archive-confirm': sessionId },
+                                    h('span', { style: { flex: 1 } }, '这个会话正在执行，归档会先停止它'),
+                                    h('button', {
+                                      style: { ...CSS.rowAction, ...CSS.rowActionPrimary },
+                                      'data-mixer-archive-stop': sessionId,
+                                      onClick: () => onStopAndArchive(sessionId),
+                                    }, '停止并归档'),
+                                    h('button', {
+                                      style: CSS.rowAction,
+                                      'data-mixer-archive-cancel': sessionId,
+                                      onClick: onDismissArchive,
+                                    }, '取消'),
+                                  )
+                                : null,
                             )
                           }),
                     )
@@ -859,7 +934,8 @@ window.__ModuleLoader__.load({
         channels, hiddenWaiting, hiddenCount, parked,
         attention, backToConversation,
         workspaces, sessions, landingId, landingTitle,
-        onPickLanding, onToggleChannel, onNewSession, onPanelOpened, createError,
+        onPickLanding, onToggleChannel, onNewSession, onPanelOpened, notice,
+        archived, onArchive, onStopAndArchive, archiveConfirm, onDismissArchive,
       } = props
       const [panelOpen, setPanelOpen] = useState(false)
       const waitingCount = channels.filter(id => attention[id] !== undefined).length
@@ -902,6 +978,7 @@ window.__ModuleLoader__.load({
                 onClose: () => setPanelOpen(false),
                 workspaces, sessions, channels, parked, attention,
                 landingId, landingTitle, onPickLanding, onToggleChannel,
+                archived, onArchive, onStopAndArchive, archiveConfirm, onDismissArchive,
                 onNewSession: () => { setPanelOpen(false); onNewSession() },
               })
             : null),
@@ -912,13 +989,13 @@ window.__ModuleLoader__.load({
         waitingCount > 0
           ? h('span', { style: CSS.chip }, h('span', { style: CSS.dot }), `${waitingCount} 个通道在等你`)
           : null,
-        createError === undefined
+        notice === undefined
           ? null
           : h('span', {
               style: { ...CSS.chip, borderColor: T.warn, color: T.fg },
-              title: '宿主没有返回可用的新会话；详情在控制台',
-              'data-mixer-create-error': '',
-            }, createError),
+              title: '详情在控制台',
+              'data-mixer-notice': '',
+            }, notice),
         hiddenCount > 0
           ? h('button', {
               style: CSS.chip,
@@ -1305,7 +1382,7 @@ window.__ModuleLoader__.load({
     function MixerPanel(props) {
       const {
         useSessions, useSessionStatus, useWorkspaces, SessionProvider, renderFactorySlot, refFor,
-        backToConversation, createSession, listViews, sidebar, useStore, actions,
+        backToConversation, createSession, archiveSession, listViews, sidebar, useStore, actions,
         parkedIds, park, unpark, unparkAll, createdSessions, takePendingFirst,
       } = props
       /* Channels put away with the x live in the PLUGIN scope: not in the persisted
@@ -1320,10 +1397,12 @@ window.__ModuleLoader__.load({
          because the host's InputBar auto-focuses every pane and the last mount wins
          (spec §5.1, requirement 2). */
       const [focusId, setFocusId] = useState(undefined)
-      /* The last create failure, shown in the top bar. A failed create must not look
-         like a no-op: the host's own entrance reports failures through its notify
-         service, so ours reports through the bar it already owns. */
-      const [createError, setCreateError] = useState(undefined)
+      /* The last thing the bar must tell the user (a failed create, a failed archive).
+         A failed action must not look like a no-op: the host reports its own through the
+         notify service, so ours reports through the bar it already owns. */
+      const [notice, setNotice] = useState(undefined)
+      /* The pending "this Session is running, stop it and archive?" offer. */
+      const [archiveConfirm, setArchiveConfirm] = useState(undefined)
       /* "Insert this Session first" is handed over by the apply-scope reclaim watcher:
          the panel those channels belonged to has just been unmounted. */
       const pendingRef = useRef(null)
@@ -1509,7 +1588,7 @@ window.__ModuleLoader__.load({
       const createChannel = () => {
         const target = blankTargetFor(list, landingItem, archivedIds)
         if (target !== undefined) {
-          setCreateError(undefined)
+          setNotice(undefined)
           acceptNewChannel(target)
           return
         }
@@ -1520,14 +1599,38 @@ window.__ModuleLoader__.load({
           const sessionId = result === undefined ? undefined : result.sessionId
           if (sessionId === undefined || sessionId === null || sessionId === '') {
             /* Silently doing nothing would be worse than the host path it replaces. */
-            setCreateError(result === undefined || result.error === undefined
+            setNotice(result === undefined || result.error === undefined
               ? '新建会话失败'
               : `新建会话失败：${errorText(result.error)}`)
             return
           }
-          setCreateError(undefined)
+          setNotice(undefined)
           acceptNewChannel(sessionId)
         })
+      }
+      /* Archiving from the panel goes through the same service call the sidebar's row
+         action uses. The Host refuses while work is running; that refusal becomes an
+         inline "stop and archive" offer rather than a dead click. */
+      const archiveChannel = (sessionId) => {
+        setNotice(undefined)
+        setArchiveConfirm(undefined)
+        void archiveSession(sessionId).then(
+          () => {},
+          (reason) => {
+            if (archiveActivityOf(reason) === undefined) {
+              setNotice(`归档失败：${errorText(reason)}`)
+              return
+            }
+            setArchiveConfirm({ sessionId })
+          },
+        )
+      }
+      const stopAndArchiveChannel = (sessionId) => {
+        setArchiveConfirm(undefined)
+        void archiveSession(sessionId, { stopActivity: true }).then(
+          () => {},
+          (reason) => { setNotice(`归档失败：${errorText(reason)}`) },
+        )
       }
       /* One path for both drag gestures: a channel head dragged inside the track and a
          session row dragged in from the sidebar (both publish the SessionId as
@@ -1588,11 +1691,16 @@ window.__ModuleLoader__.load({
           landingTitle: landingItem === undefined ? undefined : landingItem.title,
           /* Each open starts from the derived landing, and drops a stale failure note:
              the note is about one attempt, not about the bar's steady state. */
-          onPanelOpened: () => { setLanding(undefined); setCreateError(undefined) },
+          onPanelOpened: () => { setLanding(undefined); setNotice(undefined); setArchiveConfirm(undefined) },
           onPickLanding: (workspaceId) => setLanding(workspaceId),
           onToggleChannel: toggleChannel,
           onNewSession: createChannel,
-          createError,
+          archived: archivedIds,
+          onArchive: archiveChannel,
+          onStopAndArchive: stopAndArchiveChannel,
+          archiveConfirm: archiveConfirm === undefined ? undefined : archiveConfirm.sessionId,
+          onDismissArchive: () => setArchiveConfirm(undefined),
+          notice,
         }),
         visible.length === 0
           ? h('div', { style: CSS.empty },
@@ -1663,6 +1771,7 @@ window.__ModuleLoader__.load({
       landingWorkspace,
       blankTargetFor,
       shouldReclaimPanel,
+      archiveActivityOf,
       resizedWeights,
       crumbsFor,
       createBoardStore,
@@ -1726,6 +1835,16 @@ window.__ModuleLoader__.load({
             },
           )
         }
+
+        /**
+         * Archive a Session the way the sidebar's own row action does — through the
+         * same service the host's row calls (`uiWorkspace.archiveSession`,
+         * navigation.ts:272), including its `stopActivity` option for the "work is
+         * running" refusal. The host's own toast/confirm surfaces are private to
+         * ui-workspace, so the panel renders its own; the pruning of an open channel
+         * comes free, because the archive lands in the workspaces snapshot (spec §4.1).
+         */
+        const archiveSession = (sessionId, options) => ctx.uiWorkspace.archiveSession(sessionId, options)
 
         /* "Put away with the x" is plugin-scope state: it must outlive a panel
            remount (ADR-0003) without ever being persisted (spec §5.3). */
@@ -1834,6 +1953,7 @@ window.__ModuleLoader__.load({
             refFor,
             backToConversation: () => ctx.layout.selectPanel('conversation'),
             createSession,
+            archiveSession,
             parkedIds,
             park,
             unpark,

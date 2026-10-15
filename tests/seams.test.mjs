@@ -23,6 +23,7 @@ const {
   landingWorkspace,
   blankTargetFor,
   shouldReclaimPanel,
+  archiveActivityOf,
   resizedWeights,
   crumbsFor,
   createBoardStore,
@@ -187,6 +188,31 @@ test('createBoardStore: one persisted root board with three write actions', () =
   handle.spec.actions.dropWeights(draft, ['a'])
   assert.deepEqual(draft.weights, { b: 1 })
   assert.deepEqual(draft.channels, ['a', 'b'])
+})
+
+test('archiveActivityOf: only the Host\'s running-work refusal, by error NAME', () => {
+  /* The host's own check (ui-workspace/index.ts:326) goes by name on purpose. */
+  const refusal = Object.assign(new Error('active'), {
+    name: 'WorkspaceArchiveError',
+    rpcError: { code: 'workspace/session-active', details: { activity: [{ kind: 'running' }] } },
+  })
+  assert.deepEqual(archiveActivityOf(refusal), [{ kind: 'running' }])
+  /* Same refusal without an activity list is still a refusal. */
+  const bare = Object.assign(new Error('active'), {
+    name: 'WorkspaceArchiveError',
+    rpcError: { code: 'workspace/session-active' },
+  })
+  assert.deepEqual(archiveActivityOf(bare), [])
+  /* Any other failure is a plain failure, not a stop-and-archive offer. */
+  assert.equal(archiveActivityOf(new Error('nope')), undefined)
+  assert.equal(archiveActivityOf(Object.assign(new Error('x'), { name: 'WorkspaceArchiveError' })), undefined)
+  assert.equal(archiveActivityOf(Object.assign(new Error('x'), {
+    name: 'WorkspaceArchiveError',
+    rpcError: { code: 'workspace/unknown' },
+  })), undefined)
+  assert.equal(archiveActivityOf(undefined), undefined)
+  assert.equal(archiveActivityOf('boom'), undefined)
+  assert.equal(archiveActivityOf({ name: 'WorkspaceArchiveError' }), undefined)
 })
 
 /*

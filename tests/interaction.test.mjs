@@ -218,7 +218,7 @@ test('interaction: a failed create says so instead of silently doing nothing (§
   /* The board is untouched, and the bar carries the reason — the host's own entrance
      reported failures through its notify service, so ours must not be a silent no-op. */
   assert.deepEqual(ui.instance.getSnapshot().channels, ['s1', 's2'])
-  const notice = ui.$('[data-mixer-create-error]')
+  const notice = ui.$('[data-mixer-notice]')
   assert.ok(notice !== null, 'a failed create must be visible')
   assert.match(notice.textContent, /writer held/)
 })
@@ -342,6 +342,81 @@ test('interaction: the top bar never names a workspace, the panel does (§5.2)',
   /* The name is still reachable where it answers a real question: the landing column. */
   click(ui.$('[data-mixer-sessions]'))
   assert.match(ui.$('[data-mixer-landing="w1"]').textContent, /主工作区/)
+})
+
+test('interaction: archived Sessions are hidden from the panel, like the sidebar (§5.2)', async () => {
+  const ui = await loadInteractive()
+  const withArchived = {
+    items: [{ workspaceId: 'w1', title: '主工作区', path: '/repo', sessionIds: ['s1', 's2', 's3'] }],
+    archivedSessionIds: ['s2'],
+  }
+  ui.draw({ board: { channels: ['s1'], weights: {} }, list, status, workspaces: withArchived })
+  const { act, window } = ui
+  act(() => { ui.$('[data-mixer-sessions]').dispatchEvent(new window.MouseEvent('click', { bubbles: true })) })
+
+  /* An archived row is not openable and must not be pickable as a channel, so it is
+     simply not listed — the panel mirrors the sidebar's own filter. */
+  assert.equal(ui.$('[data-mixer-session="s2"]'), null)
+  assert.ok(ui.$('[data-mixer-session="s1"]') !== null)
+  assert.ok(ui.$('[data-mixer-session="s3"]') !== null)
+  assert.equal(ui.$$('[data-mixer-session-panel] input[type=checkbox]').length, 2)
+})
+
+test('interaction: hovering a row offers archive, which archives and closes the channel (§5.2)', async () => {
+  const ui = await mountTwo()
+  const { act, window } = ui
+  const hover = (element, type) => act(() => { element.dispatchEvent(new window.MouseEvent(type, { bubbles: true })) })
+  act(() => { ui.$('[data-mixer-sessions]').dispatchEvent(new window.MouseEvent('click', { bubbles: true })) })
+
+  const row = ui.$('[data-mixer-session="s2"]')
+  assert.equal(ui.$('[data-mixer-archive="s2"]'), null, 'the action is hover-only')
+  hover(row, 'mouseover')
+  const action = ui.$('[data-mixer-archive="s2"]')
+  assert.ok(action !== null, 'hovering a row must offer the archive action')
+  act(() => { action.dispatchEvent(new window.MouseEvent('click', { bubbles: true })) })
+
+  /* Same service call the sidebar's own row action makes, with no stopActivity option
+     unless the Host refused first. */
+  assert.deepEqual(ui.host.archiveCalls, [{ sessionId: 's2', options: undefined }])
+
+  /* The archive lands in the workspaces snapshot, and that prunes the open channel. */
+  const withArchived = {
+    items: [{ workspaceId: 'w1', title: '主工作区', path: '/repo', sessionIds: ['s1', 's2', 's3'] }],
+    archivedSessionIds: ['s2'],
+  }
+  ui.draw({ workspaces: withArchived })
+  assert.deepEqual(ui.$$('[data-mixer-pane]').map(node => node.getAttribute('data-mixer-pane')), ['s1'])
+})
+
+test('interaction: a running Session asks before archiving, then stops and archives (§5.2)', async () => {
+  const ui = await mountTwo()
+  const { act, window } = ui
+  const hover = (element, type) => act(() => { element.dispatchEvent(new window.MouseEvent(type, { bubbles: true })) })
+  /* The Host's refusal for running work: class identity by NAME, because client plugin
+     bundles do not share error-class identity (ui-workspace/index.ts:326). */
+  ui.host.setArchiveFailure(Object.assign(new Error('session active'), {
+    name: 'WorkspaceArchiveError',
+    rpcError: { code: 'workspace/session-active', details: { activity: [{ kind: 'running' }] } },
+  }))
+  act(() => { ui.$('[data-mixer-sessions]').dispatchEvent(new window.MouseEvent('click', { bubbles: true })) })
+  hover(ui.$('[data-mixer-session="s2"]'), 'mouseover')
+  await act(async () => {
+    ui.$('[data-mixer-archive="s2"]').dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+    await new Promise(resolve => setTimeout(resolve, 0))
+  })
+
+  /* A dead click would be worse than the host's own confirm dialog: offer the stop. */
+  const confirm = ui.$('[data-mixer-archive-confirm="s2"]')
+  assert.ok(confirm !== null, 'the refusal must offer to stop and archive')
+  await act(async () => {
+    ui.$('[data-mixer-archive-stop="s2"]').dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+    await new Promise(resolve => setTimeout(resolve, 0))
+  })
+  assert.deepEqual(ui.host.archiveCalls, [
+    { sessionId: 's2', options: undefined },
+    { sessionId: 's2', options: { stopActivity: true } },
+  ])
+  assert.equal(ui.$('[data-mixer-archive-confirm="s2"]'), null)
 })
 
 test('interaction: a view tab pins the view through the factory seam (§4.4)', async () => {

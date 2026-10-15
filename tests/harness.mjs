@@ -181,7 +181,9 @@ export function createHost(definition, { viewEntries = DEFAULT_VIEW_ENTRIES } = 
   const released = []
   const selectPanelCalls = []
   const createCalls = []
+  const archiveCalls = []
   let createFailure
+  let archiveFailure
   const listListeners = new Set()
   const panelListeners = new Set()
   const disposers = []
@@ -243,14 +245,23 @@ export function createHost(definition, { viewEntries = DEFAULT_VIEW_ENTRIES } = 
         },
       },
     },
+    /* The service the sidebar's own archive row action calls (navigation.ts:272). */
+    uiWorkspace: {
+      archiveSession: (sessionId, options) => {
+        archiveCalls.push({ sessionId, options })
+        if (archiveFailure !== undefined) return Promise.reject(archiveFailure)
+        return Promise.resolve()
+      },
+    },
   }
   definition.apply(ctx)
   const main = registrations.find(entry => entry.options.name === 'main')
   if (main === undefined) throw new Error('main panel was not registered')
   return {
     registrations, commands, ctx, retained, released, main,
-    selectPanelCalls, createCalls, setList, setPanelInfo,
+    selectPanelCalls, createCalls, archiveCalls, setList, setPanelInfo,
     setCreateFailure: (error) => { createFailure = error },
+    setArchiveFailure: (error) => { archiveFailure = error },
     panelInfo: () => panelInfoState,
     dispose: () => { for (const dispose of disposers) dispose() },
   }
