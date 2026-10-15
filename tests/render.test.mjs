@@ -56,6 +56,75 @@ test('render: every pane shows its own state marker, and the sidebar parity hold
   assert.match(html, /1 个通道在等你/)
 })
 
+test('render: a silent status source falls back to the list row, the way the sidebar does', async () => {
+  const { render } = await loadRendered()
+  /* `tree.ts:410` is `status?.running ?? summary.running`: the unified status can exist
+     without a running baseline, and can be missing entirely for a Session the list
+     still knows about. Both must fall back to the row, or a running channel would
+     render as idle. */
+  const silent = new Map([
+    ['s2', { running: undefined, pendingInteraction: undefined, completionUnread: false }],
+  ])
+  const runningRow = {
+    ...list,
+    byId: { ...list.byId, s2: { ...list.byId.s2, running: true } },
+  }
+  const withEntry = render({
+    board: { channels: ['s2'], weights: {} },
+    list: runningRow,
+    status: silent,
+    workspaces,
+  })
+  assert.match(withEntry.html, /data-mixer-pane="s2"[^>]*data-mixer-state="running"/)
+
+  /* No status entry at all for that Session. */
+  const withoutEntry = render({
+    board: { channels: ['s2'], weights: {} },
+    list: runningRow,
+    status: new Map(),
+    workspaces,
+  })
+  assert.match(withoutEntry.html, /data-mixer-pane="s2"[^>]*data-mixer-state="running"/)
+})
+
+test('render: subagents fall back to their own list rows too', async () => {
+  const { render } = await loadRendered()
+  /* The child has a status entry with no running baseline, so `tree.ts:392` falls back
+     to `list.byId[child.id].running` — subagent rows are published as list fallback
+     rows for exactly this reason (see SessionListState's own note). */
+  const childSilent = new Map([
+    ['s1', { running: false, pendingInteraction: undefined, completionUnread: false }],
+    ['x1', { running: undefined, pendingInteraction: undefined, completionUnread: false }],
+  ])
+  const listWithChildRow = {
+    ...list,
+    byId: { ...list.byId, x1: { id: 'x1', displayTitle: '子代理', blank: false, running: true, parentId: 's1' } },
+    /* The catalog is keyed by the PARENT session (tree.ts:391), so channel s1 needs one. */
+    projectionsBySession: { ...list.projectionsBySession, s1: { values: { subagentCatalog: [{ id: 'x1' }] } } },
+  }
+  const { html } = render({
+    board: { channels: ['s1'], weights: {} },
+    list: listWithChildRow,
+    status: childSilent,
+    workspaces,
+  })
+  assert.match(html, /data-mixer-pane="s1"[^>]*data-mixer-state="subagents"/)
+  assert.match(html, /aria-label="1 个子智能体运行中"/)
+
+  /* With neither source running, the child is not counted. */
+  const idleChild = new Map([
+    ['s1', { running: false, pendingInteraction: undefined, completionUnread: false }],
+    ['x1', { running: false, pendingInteraction: undefined, completionUnread: false }],
+  ])
+  const none = render({
+    board: { channels: ['s1'], weights: {} },
+    list: listWithChildRow,
+    status: idleChild,
+    workspaces,
+  })
+  assert.match(none.html, /data-mixer-pane="s1"[^>]*data-mixer-state="idle"/)
+})
+
 test('render: idle panes carry the state marker but render no dot', async () => {
   const { render } = await loadRendered()
   const idle = new Map([['s1', { running: false, pendingInteraction: undefined, completionUnread: false }]])

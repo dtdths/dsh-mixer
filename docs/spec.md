@@ -266,7 +266,7 @@ e.dataTransfer.setData('text/plain', node.id)   // node.id 就是 SessionId
 
 ## 6. 验证清单（装完怎么确认生效）
 
-0. **先跑自动化**：`npm run check`（语法 + 38 个用例：纯函数缝 + 真 store 引擎持久化 + 真 React 静态渲染 + 侧栏折叠 seam + 侧栏措辞对齐 + 冷启动守卫）。这一条绿了再动浏览器 —— 它覆盖的是"冷启动会炸整页"和"注册事实静默丢失"这两类只有跑起来才看得见的问题。
+0. **先跑自动化**：`npm run check`（语法 + 40 个用例：纯函数缝 + 真 store 引擎持久化 + 真 React 静态渲染 + 侧栏折叠 seam + 侧栏措辞对齐 + 冷启动守卫）。这一条绿了再动浏览器 —— 它覆盖的是"冷启动会炸整页"和"注册事实静默丢失"这两类只有跑起来才看得见的问题。
 1. **安装**：`plugin_manager` → `install_bundle`，target = **本包根目录**；确认返回 `application: applied` 且 `warnings` 为空。随后**把 `dsh-mixer-spike` 从 profile 卸掉**（否则原型与正式版同时注册 `main` 的 key、会话头按钮和 `/mixer`，行为不可预测）。
    **验收判据（profile 文件）**：`~/.dsh/profiles/web/package.json` 里应当只剩 `"dsh-mixer": "link:/Users/user/Documents/code/d/dsh-mixer"` 这一条 mixer 依赖，且 `dsh.profile.bundles` 里只列 `dsh-mixer`、**不含** `dsh-mixer-spike`（装之前那里写的是 spike）。
 2. **冷启动**（关键，别用热重载代替）：**硬刷新**页面，确认**没有** `Failed to load plugins` / `web boot: N entry did not activate`。任何 `apply()` 改动都必须重做这一步。
@@ -404,4 +404,4 @@ e.dataTransfer.setData('text/plain', node.id)   // node.id 就是 SessionId
 | `createSidebar(ctx)` | 折叠探针**唯一**所在地（§7.1，含"上游有 API 就换掉"的注释） |
 | `createBoardStore()` | `defineStore({persist:'dsh.mixer.v1'})`；store 不可用时退化到内存实现 |
 
-**验证**：`npm run check`（语法 + **38 个用例** + 冷启动）在本机全绿；**浏览器行为仍需用户按 §6 十条核对**（装根包、卸 `dsh-mixer-spike`、硬刷新）。
+**验证**：`npm run check`（语法 + **40 个用例** + 冷启动）在本机全绿；**浏览器行为仍需用户按 §6 十条核对**（装根包、卸 `dsh-mixer-spike`、硬刷新）。
