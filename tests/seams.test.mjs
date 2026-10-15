@@ -1,0 +1,186 @@
+/**
+ * Seam tests for the mixer. Everything here runs in node against the shipped
+ * client.js (tests/harness.mjs loads it with a fake module table), so the pure
+ * decisions the UI depends on are pinned without a browser.
+ *
+ * The state expectations are copied from the host's own sidebar row
+ * (`ui-workspace/src/client/rows/Rows.tsx:347-397`), which is the whole point of
+ * channelState: the pane and its sidebar row must never disagree.
+ */
+import assert from 'node:assert/strict'
+import test from 'node:test'
+import { loadPlugin } from './harness.mjs'
+
+const { seams } = await loadPlugin()
+const {
+  channelState,
+  visiblePendingKind,
+  runningSubagentCount,
+  subagentCatalogOf,
+  normalizeBoard,
+  moveChannel,
+  resizedWeights,
+  crumbsFor,
+  createBoardStore,
+} = seams
+
+const stateOf = input => channelState({
+  pendingKind: undefined, running: false, subagents: 0, completed: false, ...input,
+})
+
+test('channelState: waiting owns the stripe, so it renders no primary dot', () => {
+  const state = stateOf({ pendingKind: 'approval' })
+  assert.equal(state.key, 'waiting')
+  assert.deepEqual(state.dots, [])
+})
+
+test('channelState: a running subagent is CO-displayed beside waiting, not instead of it', () => {
+  const state = stateOf({ pendingKind: 'plan-review', subagents: 3 })
+  assert.equal(state.key, 'subagents')
+  assert.equal(state.dots.length, 1)
+  assert.equal(state.dots[0].state, 'ongoing')
+  assert.equal(state.dots[0].label, '3 个子智能体运行中')
+})
+
+test('channelState: running then subagents, two dots, main one larger', () => {
+  const state = stateOf({ running: true, subagents: 1 })
+  assert.equal(state.key, 'running+subagents')
+  assert.deepEqual(state.dots.map(dot => [dot.key, dot.state, dot.size]), [
+    ['running', 'ongoing', 12],
+    ['subagents', 'ongoing', 10],
+  ])
+})
+
+test('channelState: waiting outranks running and completed', () => {
+  assert.equal(stateOf({ pendingKind: 'question', running: true, completed: true }).key, 'waiting')
+})
+
+test('channelState: subagents alone are the primary state', () => {
+  const state = stateOf({ subagents: 2 })
+  assert.equal(state.key, 'subagents')
+  assert.deepEqual(state.dots.map(dot => dot.size), [12])
+})
+
+test('channelState: completed is the green dot', () => {
+  const state = stateOf({ completed: true })
+  assert.equal(state.key, 'completed')
+  assert.deepEqual(state.dots.map(dot => [dot.state, dot.label]), [['done', '已完成']])
+})
+
+test('channelState: idle renders nothing but still names the state', () => {
+  const state = stateOf({})
+  assert.equal(state.key, 'idle')
+  assert.deepEqual(state.dots, [])
+})
+
+test('visiblePendingKind: only the three kinds the sidebar shows', () => {
+  assert.equal(visiblePendingKind({ pendingInteraction: { kind: 'approval' } }), 'approval')
+  assert.equal(visiblePendingKind({ pendingInteraction: { kind: 'plan-review' } }), 'plan-review')
+  assert.equal(visiblePendingKind({ pendingInteraction: { kind: 'question' } }), 'question')
+  assert.equal(visiblePendingKind({ pendingInteraction: { kind: 'some-domain-signal' } }), undefined)
+  assert.equal(visiblePendingKind({}), undefined)
+  assert.equal(visiblePendingKind(undefined), undefined)
+})
+
+test('runningSubagentCount: counts through the supplied predicate only', () => {
+  assert.equal(runningSubagentCount(undefined, () => true), 0)
+  assert.equal(runningSubagentCount([{ id: 'a' }, { id: 'b' }], child => child.id === 'b'), 1)
+  assert.equal(runningSubagentCount([{ id: 'a' }], () => false), 0)
+})
+
+test('subagentCatalogOf: every missing layer means "no subagents"', () => {
+  assert.deepEqual(subagentCatalogOf(undefined, 'a'), [])
+  assert.deepEqual(subagentCatalogOf({}, 'a'), [])
+  assert.deepEqual(subagentCatalogOf({ projectionsBySession: {} }, 'a'), [])
+  assert.deepEqual(subagentCatalogOf({ projectionsBySession: { a: {} } }, 'a'), [])
+  assert.deepEqual(subagentCatalogOf({ projectionsBySession: { a: { values: {} } } }, 'a'), [])
+  assert.deepEqual(
+    subagentCatalogOf({ projectionsBySession: { a: { values: { subagentCatalog: [{ id: 'b' }] } } } }, 'a'),
+    [{ id: 'b' }],
+  )
+})
+
+test('normalizeBoard: bad data falls back, field by field', () => {
+  assert.deepEqual(normalizeBoard(undefined), { channels: [], weights: {} })
+  assert.deepEqual(normalizeBoard('garbage'), { channels: [], weights: {} })
+  assert.deepEqual(normalizeBoard({ channels: 'nope', weights: 7 }), { channels: [], weights: {} })
+  assert.deepEqual(
+    normalizeBoard({ channels: ['a', 'a', '', 5, null, 'b'], weights: { a: 2, b: 'x', c: 3 } }),
+    { channels: ['a', 'b'], weights: { a: 2, c: 3 } },
+  )
+  assert.deepEqual(
+    normalizeBoard({ channels: ['a'], weights: { a: Number.NaN } }),
+    { channels: ['a'], weights: {} },
+  )
+  assert.deepEqual(
+    normalizeBoard({ channels: ['a'], weights: { a: -1 } }),
+    { channels: ['a'], weights: {} },
+  )
+  /* Weights of Sessions that are not channels right now survive: a channel closed
+     with the x must come back at the same proportions (spec §4.1). */
+  assert.deepEqual(normalizeBoard({ channels: ['a'], weights: { b: 4 } }), { channels: ['a'], weights: { b: 4 } })
+  assert.deepEqual(normalizeBoard({ channels: [], weights: { b: 4, '': 2, c: 'x' } }), { channels: [], weights: { b: 4 } })
+})
+
+test('moveChannel: reorder inside the track corrects the removed cell', () => {
+  assert.deepEqual(moveChannel(['a', 'b', 'c'], 'a', 3), ['b', 'c', 'a'])
+  assert.deepEqual(moveChannel(['a', 'b', 'c'], 'c', 0), ['c', 'a', 'b'])
+  /* Dropped back onto its own slot: the cell it would be removed from is compensated,
+     so the list is unchanged. */
+  assert.deepEqual(moveChannel(['a', 'b', 'c'], 'b', 1), ['a', 'b', 'c'])
+  assert.deepEqual(moveChannel(['a', 'b', 'c'], 'b', 2), ['a', 'b', 'c'])
+})
+
+test('moveChannel: a Session dragged in from the sidebar is inserted', () => {
+  assert.deepEqual(moveChannel(['a', 'b'], 'z', 0), ['z', 'a', 'b'])
+  assert.deepEqual(moveChannel(['a', 'b'], 'z', 1), ['a', 'z', 'b'])
+  assert.deepEqual(moveChannel(['a', 'b'], 'z', 9), ['a', 'b', 'z'])
+})
+
+test('resizedWeights: proportional, both sides clammped at MIN_PANE_W', () => {
+  const drag = { startX: 0, contentWidth: 1000, total: 2, beforeWeight: 1, afterWeight: 1 }
+  const right = resizedWeights(drag, 100)
+  assert.equal(right.beforeWeight, 1.2)
+  assert.equal(right.afterWeight, 0.8)
+  /* floor = total * (380 / contentWidth) = 0.76 for each side */
+  const clampedLeft = resizedWeights(drag, -500)
+  assert.equal(Number(clampedLeft.beforeWeight.toFixed(4)), 0.76)
+  assert.equal(Number(clampedLeft.afterWeight.toFixed(4)), 1.24)
+  const clampedRight = resizedWeights(drag, 500)
+  assert.equal(Number(clampedRight.afterWeight.toFixed(4)), 0.76)
+  assert.equal(Number(clampedRight.beforeWeight.toFixed(4)), 1.24)
+})
+
+test('crumbsFor: ancestry, unknown ids, cycles and the six-level cap', () => {
+  const summaries = {
+    child: { displayTitle: '子', parentId: 'parent' },
+    parent: { displayTitle: '父', parentId: undefined },
+  }
+  assert.deepEqual(crumbsFor(summaries, 'child'), [
+    { id: 'parent', title: '父' },
+    { id: 'child', title: '子' },
+  ])
+  assert.deepEqual(crumbsFor({}, 'abcdefghij'), [{ id: 'abcdefghij', title: 'abcdefgh' }])
+  const cycle = { a: { displayTitle: 'A', parentId: 'b' }, b: { displayTitle: 'B', parentId: 'a' } }
+  assert.deepEqual(crumbsFor(cycle, 'a').map(crumb => crumb.id), ['b', 'a'])
+  let deep = {}
+  for (let index = 0; index < 9; index += 1) {
+    deep[`s${index}`] = { displayTitle: `S${index}`, parentId: index === 0 ? undefined : `s${index - 1}` }
+  }
+  assert.equal(crumbsFor(deep, 's8').length, 6)
+})
+
+test('createBoardStore: one persisted root board with three write actions', () => {
+  const handle = createBoardStore()
+  assert.equal(handle.spec.persist, 'dsh.mixer.v1')
+  const draft = handle.spec.init()
+  assert.deepEqual(draft, { channels: [], weights: {} })
+  handle.spec.actions.setChannels(draft, ['a', 'b'])
+  handle.spec.actions.setWeights(draft, { a: 2, b: 1 })
+  assert.deepEqual(draft, { channels: ['a', 'b'], weights: { a: 2, b: 1 } })
+  /* dropWeights removes exactly the Sessions that are really gone, so a channel
+     closed with the x keeps its width. */
+  handle.spec.actions.dropWeights(draft, ['a'])
+  assert.deepEqual(draft.weights, { b: 1 })
+  assert.deepEqual(draft.channels, ['a', 'b'])
+})

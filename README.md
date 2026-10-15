@@ -29,10 +29,10 @@ DSH 原有界面增加一个**视图切换**按钮 / 指令，在「常规形态
 
 ## 状态
 
-**设计定稿，待实现。**
+**设计定稿，根包 `dsh-mixer` 已实现（分支 `feat/mixer-v1`），待装到 profile 上按清单验收。**
 
-- **[`docs/spec.md`](docs/spec.md) 是交接物**：照着它可以直接把插件写出来，无需回头问待定项。
-- 设计由一次性原型验证（分支 [`spike/mixer-two-pane`](https://github.com/dtdths/dsh-mixer/tree/spike/mixer-two-pane) 的 `spike/` 包 `dsh-mixer-spike`），**根包 `dsh-mixer` 本体尚未实现**。
+- **[`docs/spec.md`](docs/spec.md) 是交接物**：§1–§8 是设计，**§11 是正式版实现状态**（文件、内部缝、验证命令）。
+- 设计由一次性原型验证（分支 [`spike/mixer-two-pane`](https://github.com/dtdths/dsh-mixer/tree/spike/mixer-two-pane) 的 `spike/` 包 `dsh-mixer-spike`），机制已全部搬进根包；**装根包后请把 spike 卸掉**。
 - 原型已实测确认关键前提：**多会话真并排可行**（每格渲染官方 composer 与完整对话记录）。
 - Host half 保持空 —— 本需求无需 Host 改动。
 
@@ -40,30 +40,40 @@ DSH 原有界面增加一个**视图切换**按钮 / 指令，在「常规形态
 
 ```
 dsh-mixer/
-├── package.json          # bundle 清单（待实现：根包本体）
+├── package.json          # bundle 清单 + dsh.client.external / inject
 ├── cordis.patch.yml      # 插入行 id=dsh-mixer / name=dsh-mixer
 ├── index.js              # Host half（保持为空）
-├── client.js             # Client half（待实现）
+├── client.js             # Client half（全部 UI 与状态，单文件）
+├── boot-check.mjs        # 冷启动守卫（真实 Cordis Context + 对照项）
+├── tests/                # node --test 覆盖的纯函数缝
 ├── locale/{en,zh}.json   # meta.title / meta.description
 ├── icon.svg              # 原创图标：三路推子，其中一路亮灯
 ├── docs/
-│   ├── spec.md            # ★ 实现 spec（交接物）
+│   ├── spec.md            # ★ 实现 spec（§11 = 实现状态）
 │   ├── plugin-gotchas.md  # 已验证的 DSH 客户端插件坑 + 证据
 │   ├── naming.md          # 命名决策记录
 │   ├── open-questions.md  # 立项前的问题清单（已被 spec 取代，留作过程记录）
 │   ├── adr/               # ADR-0001 自持引用来源 / ADR-0002 整屏替换走 main
 │   ├── research/          # 可行性调研报告（83 个行号锚点已核校）
 │   └── agents/            # issue tracker / triage 标签 / 领域文档约定
-├── spike/                # 一次性原型（仅在 spike 分支上）
 └── LICENSE
 ```
+
+原型（`spike/`）只在 `spike/mixer-two-pane` 分支上，保留作对照，不参与根包运行。
 
 ## 安装与验证
 
 只装 Client half，从本仓库目录安装：
 
 ```
-plugin_manager → install_bundle，target = 本包目录
+plugin_manager → install_bundle，target = 本包根目录
+# 然后从 profile 里卸掉 dsh-mixer-spike（原型与正式版会抢同一个 main key）
+```
+
+拉代码后先跑自动化（无需浏览器）：
+
+```bash
+npm run check        # 语法 + 纯函数测试 + 冷启动守卫
 ```
 
 profile 会生成一条 `link:`，改代码后刷新即生效。**装完的验证清单见 [docs/spec.md](docs/spec.md) §6**（其中第 2 条"硬刷新冷启动"是必须做的 —— 任何 `apply()` 改动都不能只靠热重载验证）。

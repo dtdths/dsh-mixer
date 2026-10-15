@@ -43,10 +43,13 @@ ctx.inject(['commandUi'], (scope) => {
 **本仓库的守卫**：
 
 ```bash
-node spike/boot-check.mjs
+npm run check        # 语法 + 纯函数测试 + 冷启动
+node boot-check.mjs  # 只跑冷启动
 ```
 
-它把真实的 `spike/client.js` 放进真实的 Cordis Context，按宿主装载路径（`root.inject(def.inject, scope => apply(scope))`）启动，读 fiber 状态；并内置一个**对照项**复现当年的故障模式 —— 对照项若不再失败，脚本会自报"这个检查证明不了任何东西"。
+它把真实的 `client.js` 放进真实的 Cordis Context，按宿主装载路径（`root.inject(def.inject, scope => apply(scope))`）启动，读 fiber 状态；并内置一个**对照项**复现当年的故障模式 —— 对照项若不再失败，脚本会自报"这个检查证明不了任何东西"。它还断言两件**静默失败**的注册事实：`main` 面板声明了 session 作用域的子槽（见下一条）且带着 board store。
+
+原型时期对应的是 `spike/boot-check.mjs`（在 `spike/mixer-two-pane` 分支上）。
 
 ## 3. 多会话并排的关键前提：声明一个 session 作用域的子槽
 
