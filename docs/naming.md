@@ -28,7 +28,9 @@
 | channel | `mixer.channel.*` | 每一格会话面板 |
 | waiting | `mixer.waiting.*` | 该通道在等你决策 / 授权 |
 | solo | `mixer.solo.*` | 只聚焦一个通道 |
-| mute | `mixer.mute.*` | 暂时收起一个通道 |
+| 移出 / put away | 二期接 locale 时再定 key 空间（原拟 `mixer.mute.*`） | 暂时从调音台收起一个通道；会话本身不受影响，可放回 |
+
+> ⚠️ 2026-10-15 定名：`×` 的那个行为叫**移出（put away）**，**不叫 `mute`**；`mute` 一词保留给将来"通道还在、只是不打扰"的能力，与 `solo` 同族。见 `CONTEXT.md` 与 `docs/spec.md` §9.1。
 
 ## 落选方案
 
@@ -54,4 +56,4 @@
 | `dsh-deck`（牌组） | 歧义多（甲板 / 牌组 / 演示文稿） |
 | `dsh-fleet` / `dsh-docks` / `dsh-bays` | 偏"集群/停靠"味，与并行推进的语义有偏差 |
 
-结论：`dsh-mixer` 是唯一让「独立输入」和「谁在等你」共用一个隐喻、且后续交互（solo / mute / 状态灯）能自然生长的名字。
+结论：`dsh-mixer` 是唯一让「独立输入」和「谁在等你」共用一个隐喻、且后续交互（solo / 移出（put away） / 状态灯）能自然生长的名字。

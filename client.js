@@ -15,6 +15,12 @@
  * retained, including channels closed with the x, because the waiting signal only
  * exists for retained Sessions; references are released on plugin unload only.
  *
+ * Creating a Session does NOT go through `ctx.uiWorkspace.startSession`: that path
+ * reveals the new Session (`replaceMain(…, 'reveal')` → `selectPanel(null)`) and
+ * throws the user out of the mixer. We create it ourselves and add a channel, and we
+ * take the centre panel back when one of the HOST's own new-session entrances does
+ * the reveal for us — under a narrow condition only (docs/adr/0003).
+ *
  * Host limits this module lives with (evidence in docs/spec.md §7):
  *   - the sidebar cannot reach zero width, so entering the mixer collapses it to
  *     the 56px rail and the top bar carries what the rail loses,
@@ -121,6 +127,12 @@ window.__ModuleLoader__.load({
     const RAIL_MIN_PANE_W = 560
     const RAIL_MIN_CONTAINER_W = RAIL_MIN_PANE_W - 48
     /**
+     * How many animation frames the caret hand-off waits for a pane's composer to
+     * appear (spec §5.1③). ~0.5s at 60fps: long enough for the host factory to paint,
+     * short enough that a never-rendering pane does not hold the intent forever.
+     */
+    const FOCUS_RETRY_FRAMES = 30
+    /**
      * Persist key for the whole board (which Sessions are channels, plus their
      * relative widths), namespaced like ui-sidebar-right's `dsh.sidebar-right.v1`.
      *
@@ -162,6 +174,17 @@ window.__ModuleLoader__.load({
     const VISIBLE_PENDING_KINDS = ['approval', 'plan-review', 'question']
     const STATE_LABEL = { running: '进行中', completed: '已完成', idle: '空闲' }
     const subagentsLabel = n => `${n} 个子智能体运行中`
+    /**
+     * One line of human-readable text for a create failure. The host reports its own
+     * failures as `code: message` from the transport error; anything else (a thrown
+     * value from another realm) is stringified rather than shown as `[object Object]`.
+     */
+    function errorText(error) {
+      if (error === null || error === undefined) return '未知错误'
+      if (typeof error === 'string') return error
+      if (typeof error.message === 'string' && error.message !== '') return error.message
+      return String(error)
+    }
     /* Full parity with the sidebar row would mean a grey idle dot in EVERY header;
        the user looked at that and said drop it (2026-10-15). Idle is therefore the one
        documented deviation: the other four states stay identical to the sidebar, and
@@ -216,6 +239,142 @@ window.__ModuleLoader__.load({
       /* `index` counts rendered cells, which still include the dragged one. */
       const target = Math.max(0, Math.min(from !== -1 && from < index ? index - 1 : index, without.length))
       return [...without.slice(0, target), sessionId, ...without.slice(target)]
+    }
+
+    /* ------------------------------------------------------------------
+       2026-10-15, second round of UI decisions (spec §4.1 / §4.4 / §5.1 / §5.2):
+       an empty channel must land on the host's own hero phase, "new session" must
+       not leave the mixer, and the top bar asks a workspace only to answer "where
+       does a new Session land".
+       ------------------------------------------------------------------ */
+
+    /**
+     * The `conversation.content` factory input that puts an empty channel on the
+     * SAME phase the regular view uses. The host derives this itself from the
+     * Session snapshot (`ConversationMainPanel.tsx:41-43`: a blank, already-open
+     * Session is `hero`), and the composer's vertical centring is the host's CSS for
+     * that phase (`ConversationRoot.module.css:534-538`). Pinning `phase: 'active'`
+     * is what left the composer at the TOP of an empty pane, with dead space below
+     * (spec §4.4, requirement 1).
+     *
+     * Boundary: the host also reads the snapshot's `openState` / `awaitingFirstTurn`;
+     * a pane only has the list row, so `blank` is the whole judgement here. An
+     * unknown row is deliberately NOT hero — a wrong hero flash on the first frame
+     * is worse than the docked bar.
+     * @param summary - the Session's list row, or undefined.
+     * @returns the factory `phase`/`hero` input.
+     */
+    function heroFor(summary) {
+      const blank = summary !== undefined && summary !== null && summary.blank === true
+      return blank ? { phase: 'hero', hero: true } : { phase: 'active', hero: false }
+    }
+
+    /**
+     * The host's own "most recently used workspace" rule
+     * (`ui-workspace/src/client/navigation.ts:458-475`, `recentWorkspace`), which is
+     * what `startSession` falls back to when no workspace is named. Not exported by the
+     * service face, so it is mirrored here from the same two facts the plugin has:
+     * each workspace's newest Session (`updatedAt`), or its own `createdAt` when the
+     * list has not caught up. Ties follow host order, like the original.
+     * @param items - the host's workspace items, in host order.
+     * @param summaries - the Session list rows by id.
+     * @returns the workspace id to fall back to, or undefined with no workspace.
+     */
+    function recentWorkspaceId(items, summaries) {
+      let selected
+      let selectedTime = Number.NEGATIVE_INFINITY
+      for (const item of items) {
+        let latest = Number.NEGATIVE_INFINITY
+        const members = Array.isArray(item.sessionIds) ? item.sessionIds : []
+        for (const sessionId of members) {
+          const summary = summaries === undefined ? undefined : summaries[sessionId]
+          if (summary !== undefined && typeof summary.updatedAt === 'number') {
+            latest = Math.max(latest, summary.updatedAt)
+          }
+        }
+        if (latest === Number.NEGATIVE_INFINITY) latest = Date.parse(item.createdAt)
+        if (selected === undefined || latest > selectedTime) {
+          selected = item.workspaceId
+          selectedTime = latest
+        }
+      }
+      return selected
+    }
+
+    /**
+     * Where a new Session lands: the workspace owning the first visible channel
+     * (matched by cwd), else the host's own "most recently used" fallback (spec §5.2).
+     * The mixer has no "current workspace" of its own — the top bar never shows one —
+     * so this value answers exactly two questions: where `＋新建会话` creates, and which
+     * row the panel's left column preselects.
+     * @param workspaces - the host's workspace items.
+     * @param summaries - the Session list rows by id.
+     * @param firstChannelId - the first visible channel's Session id, if any.
+     * @returns a workspace id, or undefined when the host has no workspace.
+     */
+    function landingWorkspace(workspaces, summaries, firstChannelId) {
+      const items = Array.isArray(workspaces) ? workspaces : []
+      if (items.length === 0) return undefined
+      const summary = firstChannelId === undefined || summaries === undefined
+        ? undefined
+        : summaries[firstChannelId]
+      const current = summary === undefined ? undefined : items.find(item => item.path === summary.cwd)
+      return current === undefined ? recentWorkspaceId(items, summaries) : current.workspaceId
+    }
+
+    /**
+     * The blank Session that "new session" should REUSE instead of creating another
+     * one, mirroring the host's own `reuseOrCreateBlank` (navigation.ts:185-198): a
+     * blank Session inside the landing workspace, still listed, not archived.
+     * @param list - the Sessions list snapshot.
+     * @param workspace - the landing workspace item, or undefined.
+     * @param archivedIds - the host's archived Session ids.
+     * @returns the Session id to reuse, or undefined when a real create is needed.
+     */
+    function blankTargetFor(list, workspace, archivedIds) {
+      if (workspace === undefined || workspace === null) return undefined
+      const ids = list !== null && list !== undefined && Array.isArray(list.ids) ? list.ids : []
+      const byId = list !== null && list !== undefined && list.byId !== undefined ? list.byId : {}
+      const archived = Array.isArray(archivedIds) ? archivedIds : []
+      const members = Array.isArray(workspace.sessionIds) ? workspace.sessionIds : []
+      for (const id of ids) {
+        const summary = byId[id]
+        if (summary === undefined || summary.blank !== true) continue
+        if (summary.cwd !== workspace.path) continue
+        if (members.indexOf(id) === -1 || archived.indexOf(id) !== -1) continue
+        return id
+      }
+      return undefined
+    }
+
+    /**
+     * Whether the mixer should take the centre panel back.
+     *
+     * The HOST's own new-session entrances (the 56px rail's button, `session.new`)
+     * cannot be intercepted: `startSession` → `openWorkspace` → `replaceMain(…,
+     * 'reveal')` → `selectPanel(null)` (navigation.ts:433) unmounts the mixer. The
+     * plugin re-asserts its panel instead — but only on the conjunction that reads as
+     * "the mixer just went away AND the host revealed a Session it did not have
+     * before".
+     *
+     * Why the mainView half is not optional: a panel going blank with a fresh Session
+     * around is NOT enough. Clicking a sidebar row does the same `selectPanel(null)`
+     * through the same `replaceMain`, and any Session can appear from elsewhere (a
+     * background agent, another window). What only the host's own new-session path
+     * produces is a Session that was just catalogued AND is now the `mainView`
+     * reference — the reveal is what marks it. Reading the convention is allowed;
+     * writing it never is (docs/adr/0001, docs/adr/0003).
+     * @param input.leftMixer - the mixer was the active panel and went blank just now.
+     * @param input.activePanelId - where the host says the centre panel is now.
+     * @param input.newSessionIds - Session ids seen for the first time.
+     * @param input.mainViewIds - Session ids currently retained by `mainView`.
+     * @returns whether to call `selectPanel('mixer')` again.
+     */
+    function shouldReclaimPanel(input) {
+      const fresh = Array.isArray(input.newSessionIds) ? input.newSessionIds : []
+      const revealed = Array.isArray(input.mainViewIds) ? input.mainViewIds : []
+      if (input.leftMixer !== true || input.activePanelId !== null) return false
+      return fresh.some(id => revealed.indexOf(id) !== -1)
     }
 
     /**
@@ -358,10 +517,6 @@ window.__ModuleLoader__.load({
         color: T.fg, background: 'transparent', border: `1px solid transparent`,
       },
       navBtnOn: { background: T.l2, border: `1px solid ${T.b1}` },
-      ghostBtn: {
-        font: `11px/1.5 ${SANS}`, padding: '2px 9px', cursor: 'pointer', borderRadius: PILL,
-        color: T.fg2, background: 'transparent', border: `1px solid ${T.b1}`,
-      },
       button: {
         font: `12px/1.4 ${SANS}`, padding: '3px 10px', cursor: 'pointer', borderRadius: PILL,
         color: T.fg, background: T.l2, border: `1px solid ${T.b1}`,
@@ -373,20 +528,51 @@ window.__ModuleLoader__.load({
       },
       dot: { width: 7, height: 7, borderRadius: PILL, background: T.warn, flex: '0 0 auto' },
       ddWrap: { position: 'relative' },
-      ddPanel: {
-        position: 'absolute', top: 'calc(100% + 6px)', left: 0, zIndex: 40, minWidth: 340, maxWidth: 460,
-        maxHeight: '60vh', overflow: 'auto', background: T.base,
-        border: `1px solid ${T.b2}`, boxShadow: '0 8px 28px rgba(0,0,0,.22)', padding: 4,
+      /* The `会话` popover (spec §5.2, requirement 4): two COLUMNS, because the old
+         two-LEVEL dropdown made the user pick a workspace before any Session was even
+         visible, and buried "new session" one level down. Left column = landing
+         workspace only; right column = the channel picker. */
+      backdrop: { position: 'fixed', inset: 0, zIndex: 39, background: 'transparent' },
+      panel: {
+        position: 'absolute', top: 'calc(100% + 6px)', left: 0, zIndex: 40,
+        display: 'flex', background: T.base, border: `1px solid ${T.b2}`,
+        boxShadow: '0 8px 28px rgba(0,0,0,.22)', maxHeight: '62vh',
       },
-      ddRow: {
-        display: 'flex', alignItems: 'center', gap: 8, padding: '5px 8px', cursor: 'pointer',
+      panelColLeft: {
+        width: 178, flex: '0 0 auto', borderRight: `1px solid ${T.b1}`, padding: 4, overflow: 'auto',
+      },
+      panelColRight: { width: 320, flex: '0 0 auto', display: 'flex', flexDirection: 'column', minHeight: 0 },
+      panelHead: { padding: '5px 8px', color: T.fg2, font: `10.5px/1.6 ${SANS}` },
+      panelGroup: { padding: '5px 8px 2px', color: T.fg2, font: `10.5px/1.6 ${SANS}` },
+      panelRows: { flex: 1, minHeight: 0, overflow: 'auto', padding: 4 },
+      panelEmpty: { padding: '4px 8px', color: T.fg2, font: `11.5px/1.6 ${SANS}` },
+      panelFoot: {
+        display: 'flex', alignItems: 'center', gap: 8, padding: '5px 8px', borderTop: `1px solid ${T.b1}`,
+      },
+      panelHint: { color: T.fg2, font: `10.5px/1.6 ${SANS}`, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+      landingRow: {
+        display: 'flex', alignItems: 'center', gap: 6, padding: '5px 8px', cursor: 'pointer',
         font: `12px/1.6 ${SANS}`, borderRadius: SURFACE,
       },
-      ddRowOn: { background: T.l1 },
-      ddPath: { color: T.fg2, font: `10.5px/1.6 ${MONO}`, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
-      ddSub: { padding: '2px 8px 6px 26px', display: 'flex', flexDirection: 'column', gap: 2, borderLeft: `1px solid ${T.b1}`, marginLeft: 12 },
-      ddSubRow: { display: 'flex', alignItems: 'center', gap: 7, padding: '3px 6px', cursor: 'pointer', font: `11.5px/1.6 ${SANS}` },
-      backdrop: { position: 'fixed', inset: 0, zIndex: 39, background: 'transparent' },
+      landingRowOn: { background: T.l1 },
+      landingTag: {
+        flex: '0 0 auto', padding: '1px 6px', borderRadius: PILL, background: T.l2,
+        border: `1px solid ${T.b1}`, color: T.fg2, font: `10px/1.7 ${SANS}`,
+      },
+      searchRow: { padding: '5px 8px', borderBottom: `1px solid ${T.b1}` },
+      searchInput: {
+        width: '100%', font: `12px/1.6 ${SANS}`, padding: '4px 7px', borderRadius: SURFACE,
+        background: T.l1, color: T.fg, border: `1px solid ${T.b1}`, outline: 'none',
+      },
+      sessionRow: {
+        display: 'flex', alignItems: 'center', gap: 7, padding: '3px 6px', cursor: 'pointer',
+        font: `11.5px/1.6 ${SANS}`, borderRadius: SURFACE,
+      },
+      rowWarnDot: { width: 7, height: 7, flex: '0 0 auto', borderRadius: PILL, background: T.warn },
+      rowTag: {
+        flex: '0 0 auto', padding: '1px 6px', borderRadius: PILL, background: T.l2,
+        border: `1px solid ${T.b1}`, color: T.fg2, font: `10px/1.7 ${SANS}`,
+      },
       /* Channel row: a flex track (not a grid) because dividers are draggable.
          Horizontal overflow stays deliberate: cells keep MIN_PANE_W and the row
          scrolls instead of squeezing (#6), while the user can also widen a channel
@@ -404,6 +590,13 @@ window.__ModuleLoader__.load({
       dropIndicator: {
         flex: '0 0 2px', alignSelf: 'stretch', background: T.business,
       },
+      /* 让位 (spec §5.3, requirement 3): the slot is as wide as the dragged pane, so
+         the siblings really move aside instead of the line just sliding over them. The
+         2px insertion line rides its leading edge. */
+      dropSlot: { alignSelf: 'stretch', background: T.l1, boxShadow: `inset 2px 0 0 0 ${T.business}` },
+      /* The dragged pane stays in flow as a quiet placeholder: the ghost over the
+         pointer carries the live image. */
+      dragSource: { opacity: 0.4 },
       /* A 5px grab area with a 1px line down its middle, so the divider still
          reads as a hairline until you hover it. */
       resizer: {
@@ -500,8 +693,11 @@ window.__ModuleLoader__.load({
      * state rather than a silently blank pane.
      */
     function RealConversation(props) {
-      const { renderFactorySlot, viewsComponent } = props
-      const input = { variant: 'embedded', phase: 'active', hero: false }
+      const { renderFactorySlot, viewsComponent, hero } = props
+      /* The host's own phase for this Session (spec §4.4, requirement 1). An empty
+         channel must land on `hero`, because that phase's CSS is what centres the
+         composer; pinning `active` here is what left it at the top of the pane. */
+      const input = { variant: 'embedded', ...(hero === undefined ? heroFor(undefined) : hero) }
       const node = viewsComponent === undefined || viewsComponent === null
         ? renderFactorySlot('conversation.content', input)
         : renderFactorySlot('conversation.content', input, { slots: { views: viewsComponent } })
@@ -513,107 +709,186 @@ window.__ModuleLoader__.load({
     /* ---------- unified top bar ---------- */
 
     /**
-     * Two-level dropdown: level 1 is the workspace list (switch / new session),
-     * level 2 is that workspace's sessions with a checkbox per session, which is
-     * also where a channel removed by its close button comes back.
+     * The `会话` popover (spec §5.2, requirement 4): two COLUMNS, because the old
+     * two-LEVEL dropdown conflated two different jobs — navigation (where a new
+     * Session goes) and channel-set ownership (which Sessions I follow) — and made
+     * the user pick a workspace before a single Session was visible.
+     *
+     * Left column = the landing workspace, and nothing else: with the top bar showing
+     * no workspace name, this is the only place the question is answered. Right column
+     * = the channel picker, with a local title filter and the waiting / 已移出 state on
+     * every row.
      */
-    function WorkspaceDropdown(props) {
-      const { open, onOpen, workspaces, sessions, currentWorkspaceId, channels, onToggleChannel, onSwitch, onNewSession } = props
-      const [expanded, setExpanded] = useState(currentWorkspaceId || null)
-      useEffect(() => { if (open && expanded === null && workspaces.length > 0) setExpanded(workspaces[0].workspaceId) },
-        [open, expanded, workspaces])
-      if (!open) return null
+    function SessionPanel(props) {
+      const {
+        onClose, workspaces, sessions, channels, parked, attention,
+        landingId, landingTitle, onPickLanding, onToggleChannel, onNewSession,
+      } = props
+      const [query, setQuery] = useState('')
+      const needle = query.trim()
+      /* Local title filtering on purpose: the host's full-content search is a
+         different feature (request-local results, loading/error handling) and is
+         recorded as phase 2 (spec §9.1). */
+      const matches = sessionId => needle === ''
+        || String((sessions[sessionId] === undefined ? '' : sessions[sessionId].displayTitle) ?? '').includes(needle)
+
       return h(React.Fragment, null,
-        h('div', { style: CSS.backdrop, onClick: () => onOpen(false) }),
-        h('div', { style: CSS.ddPanel, 'data-mixer-dropdown': '' },
-          h('div', { style: { ...CSS.ddRow, cursor: 'default', color: T.fg2 } }, '工作区'),
-          workspaces.length === 0
-            ? h('div', { style: { ...CSS.ddRow, cursor: 'default', color: T.fg2 } }, '还没有工作区')
-            : workspaces.map(workspace => {
-                const isCurrent = workspace.workspaceId === currentWorkspaceId
-                const isOpen = workspace.workspaceId === expanded
-                return h('div', { key: workspace.workspaceId },
-                  h('div', {
-                    style: { ...CSS.ddRow, ...(isOpen ? CSS.ddRowOn : null) },
-                    onClick: () => setExpanded(isOpen ? null : workspace.workspaceId),
+        h('div', { style: CSS.backdrop, onClick: onClose }),
+        h('div', {
+          style: CSS.panel,
+          'data-mixer-session-panel': '',
+          role: 'dialog',
+          'aria-label': '会话与新建落点',
+        },
+          h('div', { style: CSS.panelColLeft, 'data-mixer-landing-column': '' },
+            h('div', { style: CSS.panelHead }, '工作区'),
+            workspaces.length === 0
+              ? h('div', { style: CSS.panelEmpty }, '还没有工作区')
+              : workspaces.map(workspace => h('div', {
+                  key: workspace.workspaceId,
+                  style: {
+                    ...CSS.landingRow,
+                    ...(workspace.workspaceId === landingId ? CSS.landingRowOn : null),
                   },
-                    h('span', { style: { fontWeight: isCurrent ? 600 : 400 } }, workspace.title),
-                    isCurrent ? h('span', { style: CSS.chip }, '当前') : null,
-                    h('span', { style: { flex: 1 } }),
-                    h('span', { style: CSS.ddPath }, workspace.path),
-                  ),
-                  isOpen
-                    ? h('div', { style: CSS.ddSub },
-                        (workspace.sessionIds || []).map(sessionId => {
-                          const summary = sessions[sessionId]
-                          const checked = channels.includes(sessionId)
-                          return h('label', { key: sessionId, style: CSS.ddSubRow },
-                            h('input', {
-                              type: 'checkbox',
-                              checked,
-                              onChange: () => onToggleChannel(sessionId),
-                            }),
-                            h('span', null, summary === undefined ? sessionId.slice(0, 8) : summary.displayTitle),
-                          )
-                        }),
-                        (workspace.sessionIds || []).length === 0
-                          ? h('div', { style: { ...CSS.ddSubRow, color: T.fg2, cursor: 'default' } }, '这个工作区还没有会话')
-                          : null,
-                        h('div', { style: { ...CSS.ddSubRow, gap: 6 } },
-                          h('button', {
-                            style: CSS.ghostBtn,
-                            onClick: () => onSwitch(workspace.workspaceId),
-                            disabled: isCurrent,
-                          }, isCurrent ? '已在此工作区' : '切换到此工作区'),
-                          h('button', {
-                            style: CSS.ghostBtn,
-                            onClick: () => onNewSession(workspace.workspaceId),
-                          }, '在此新建会话'),
-                        ),
-                      )
+                  'data-mixer-landing': workspace.workspaceId,
+                  title: `新建会话落在此工作区：${workspace.path}`,
+                  onClick: () => onPickLanding(workspace.workspaceId),
+                },
+                  h('span', {
+                    style: { flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+                  }, workspace.title),
+                  workspace.workspaceId === landingId
+                    ? h('span', { style: CSS.landingTag }, '新建落点')
                     : null,
-                )
-              }),
+                )),
+          ),
+          h('div', { style: CSS.panelColRight, 'data-mixer-session-column': '' },
+            h('div', { style: CSS.searchRow },
+              h('input', {
+                style: CSS.searchInput,
+                type: 'search',
+                value: query,
+                placeholder: '搜索会话标题…',
+                'aria-label': '搜索会话标题',
+                'data-mixer-search': '',
+                onChange: event => setQuery(event.target.value),
+              })),
+            h('div', { style: CSS.panelRows },
+              workspaces.length === 0
+                ? h('div', { style: CSS.panelEmpty }, '还没有工作区')
+                : workspaces.map(workspace => {
+                    const ids = (workspace.sessionIds || []).filter(matches)
+                    return h('div', { key: workspace.workspaceId },
+                      h('div', { style: CSS.panelGroup }, workspace.title),
+                      ids.length === 0
+                        ? h('div', { style: CSS.panelEmpty },
+                            needle === '' ? '这个工作区还没有会话' : '没有匹配的会话')
+                        : ids.map(sessionId => {
+                            const summary = sessions[sessionId]
+                            const checked = channels.indexOf(sessionId) !== -1
+                            const isParked = parked.indexOf(sessionId) !== -1
+                            return h('label', {
+                              key: sessionId,
+                              style: CSS.sessionRow,
+                              'data-mixer-session': sessionId,
+                            },
+                              h('input', {
+                                type: 'checkbox',
+                                checked,
+                                onChange: () => onToggleChannel(sessionId),
+                              }),
+                              attention[sessionId] === undefined
+                                ? null
+                                : h('span', { style: CSS.rowWarnDot, title: '这个通道在等你' }),
+                              h('span', {
+                                style: { flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+                              }, summary === undefined ? sessionId.slice(0, 8) : summary.displayTitle),
+                              isParked ? h('span', { style: CSS.rowTag }, '已移出') : null,
+                            )
+                          }),
+                    )
+                  })),
+            h('div', { style: CSS.panelFoot },
+              h('button', {
+                style: CSS.button,
+                'data-mixer-new': '',
+                title: landingTitle === undefined
+                  ? '新建会话'
+                  : `在 ${landingTitle} 新建会话并放到第一位`,
+                onClick: onNewSession,
+              }, '＋ 在此新建会话'),
+              h('span', { style: { flex: 1 } }),
+              h('span', { style: CSS.panelHint }, needle === '' ? '勾选即加入通道' : `过滤：${needle}`),
+            ),
+          ),
         ))
     }
 
     function TopBar(props) {
       const {
-        channels, hiddenWaiting, hiddenCount,
+        channels, hiddenWaiting, hiddenCount, parked,
         attention, backToConversation,
-        workspaces, sessions, currentWorkspaceId, onToggleChannel, onSwitch, onNewSession,
+        workspaces, sessions, landingId, landingTitle,
+        onPickLanding, onToggleChannel, onNewSession, onPanelOpened, createError,
       } = props
-      const [dropdownOpen, setDropdownOpen] = useState(false)
+      const [panelOpen, setPanelOpen] = useState(false)
       const waitingCount = channels.filter(id => attention[id] !== undefined).length
-      const currentWorkspace = workspaces.find(w => w.workspaceId === currentWorkspaceId)
-      /* No brand, plugin, schedule or settings entry here on purpose: the 56px
-         rail keeps the brand mark, the panel icons and the settings gear
+      /* Esc closes the popover; the backdrop covers the pointer path. */
+      useEffect(() => {
+        if (!panelOpen) return undefined
+        if (typeof document === 'undefined' || typeof document.addEventListener !== 'function') return undefined
+        const onKeyDown = (event) => { if (event.key === 'Escape') setPanelOpen(false) }
+        document.addEventListener('keydown', onKeyDown)
+        return () => document.removeEventListener('keydown', onKeyDown)
+      }, [panelOpen])
+      /* No brand, plugin, schedule or settings entry here on purpose: the 56px rail
+         keeps the brand mark, the panel icons and the settings gear
          (ui-sidebar/SidebarRoot + ui-settings-general/chrome), so repeating them
          would duplicate the same routes. The rail drops the workspace/session
-         browsing region, which is exactly what this bar carries instead. */
-      return h('div', { style: CSS.topbar },
+         browsing region, which is exactly what this bar carries instead — and, since
+         2026-10-15, it also still carries its own new-session button, which is why
+         the plugin reclaims its panel on that path (spec §5.1 / §7.2 / ADR-0003). */
+      return h('div', { style: CSS.topbar, 'data-mixer-topbar': '' },
         h('span', { style: CSS.topTitle }, '调音台'),
         h('span', { style: CSS.divider }),
 
-        /* 2. workspace dropdown: switch workspace + new session */
+        /* The ONLY panel entry: a workspace name in the bar would claim a concept the
+           mixer does not have (spec §5.2). */
         h('div', { style: CSS.ddWrap },
           h('button', {
-            style: { ...CSS.navBtn, ...(dropdownOpen ? CSS.navBtnOn : null) },
-            onClick: () => setDropdownOpen(!dropdownOpen),
-            'data-mixer-workspace': '',
-          }, `${currentWorkspace === undefined ? '工作区' : currentWorkspace.title} ▾`),
-          h(WorkspaceDropdown, {
-            open: dropdownOpen, onOpen: setDropdownOpen,
-            workspaces, sessions, currentWorkspaceId, channels,
-            onToggleChannel, onSwitch, onNewSession,
-          })),
+            style: { ...CSS.navBtn, ...(panelOpen ? CSS.navBtnOn : null) },
+            onClick: () => {
+              const next = !panelOpen
+              setPanelOpen(next)
+              if (next && typeof onPanelOpened === 'function') onPanelOpened()
+            },
+            'data-mixer-sessions': '',
+            'aria-expanded': panelOpen ? 'true' : 'false',
+            'aria-haspopup': 'dialog',
+            title: '关注的会话、新建落点与新建会话',
+          }, `会话${channels.length > 0 ? ` · ${channels.length}` : ''}`),
+          panelOpen
+            ? h(SessionPanel, {
+                onClose: () => setPanelOpen(false),
+                workspaces, sessions, channels, parked, attention,
+                landingId, landingTitle, onPickLanding, onToggleChannel,
+                onNewSession: () => { setPanelOpen(false); onNewSession() },
+              })
+            : null),
 
         h('span', { style: { flex: 1 } }),
 
-        /* 4. attention summary for channels, including the ones closed away */
+        /* Attention summary for channels, including the ones put away */
         waitingCount > 0
           ? h('span', { style: CSS.chip }, h('span', { style: CSS.dot }), `${waitingCount} 个通道在等你`)
           : null,
+        createError === undefined
+          ? null
+          : h('span', {
+              style: { ...CSS.chip, borderColor: T.warn, color: T.fg },
+              title: '宿主没有返回可用的新会话；详情在控制台',
+              'data-mixer-create-error': '',
+            }, createError),
         hiddenCount > 0
           ? h('button', {
               style: CSS.chip,
@@ -649,7 +924,7 @@ window.__ModuleLoader__.load({
     function Pane(props) {
       const {
         sessionId, summary, summaries, waitingKind, views, state,
-        onClose, renderFactorySlot,
+        onClose, onDragStateChange, renderFactorySlot,
       } = props
       const isWaiting = waitingKind !== undefined
       /* null = follow the Session's own stored view. A string pins the view by
@@ -703,7 +978,24 @@ window.__ModuleLoader__.load({
             }
             event.dataTransfer.effectAllowed = 'move'
             event.dataTransfer.setData('text/plain', sessionId)
+            /* Requirement 3: the browser's default drag image is the element carrying
+               `draggable` — this head row — so hand it the whole pane instead. The
+               snapshot is taken once, right here; HTML5 has no live drag image, which
+               is why "跟手" would mean giving up this API (spec §5.3). */
+            const pane = typeof event.currentTarget.closest === 'function'
+              ? event.currentTarget.closest('[data-mixer-pane]')
+              : null
+            if (pane !== null && typeof event.dataTransfer.setDragImage === 'function') {
+              const rect = pane.getBoundingClientRect()
+              const offsetX = Number.isFinite(event.clientX) ? event.clientX - rect.left : 0
+              const offsetY = Number.isFinite(event.clientY) ? event.clientY - rect.top : 0
+              event.dataTransfer.setDragImage(pane, offsetX, offsetY)
+            }
+            onDragStateChange(sessionId)
           },
+          /* Cancelled drags (dropped outside, Esc) never reach the track's drop
+             handler, so the placeholder and the insertion slot are cleared here too. */
+          onDragEnd: () => onDragStateChange(undefined),
         },
           /* The sidebar's own state dots (see channelState). The wait stripe stays
              the waiting mark, so a waiting channel shows no primary dot, only a
@@ -751,6 +1043,7 @@ window.__ModuleLoader__.load({
         },
           h(RealConversation, {
             renderFactorySlot,
+            hero: heroFor(summary),
             viewsComponent: pinnedView === null ? undefined : viewsComponent,
           }),
         ),
@@ -847,10 +1140,26 @@ window.__ModuleLoader__.load({
         views, weights, onResize, onDropChannel, onClose, renderFactorySlot,
       } = props
       const trackRef = useRef(null)
-      /* Insertion gap while a channel (or a sidebar session row) hovers the track. */
+      /* Insertion slot while a channel (or a sidebar session row) hovers the track. */
       const [dropIndex, setDropIndex] = useState(null)
+      /* The channel being dragged by its head, together with the geometry captured
+         when the drag started. Measuring live would feed the insertion slot back into
+         the pointer math and make the slot jump between neighbours; the snapshot also
+         supplies the slot's width (the dragged pane's own, per spec §5.3). */
+      const [drag, setDrag] = useState(undefined)
 
       const indexForPointer = (clientX) => {
+        const snapshot = drag === undefined ? undefined : drag.rects
+        if (snapshot !== undefined) {
+          let index = 0
+          for (const id of ids) {
+            const rect = snapshot[id]
+            if (rect === undefined) continue
+            if (clientX < rect.left + rect.width / 2) return index
+            index += 1
+          }
+          return ids.length
+        }
         const track = trackRef.current
         if (track === null) return ids.length
         const cells = [...track.querySelectorAll('[data-mixer-cell]')]
@@ -860,6 +1169,24 @@ window.__ModuleLoader__.load({
         }
         return cells.length
       }
+
+      /* Drag bookkeeping lives here, not in the pane: the track owns the order, the
+         pointer math and the placeholder, and a sidebar drag never calls this. */
+      const beginDrag = (sessionId) => {
+        const track = trackRef.current
+        const rects = {}
+        let width = 0
+        if (track !== null) {
+          for (const cell of track.querySelectorAll('[data-mixer-cell]')) {
+            const id = cell.getAttribute('data-mixer-cell')
+            const rect = cell.getBoundingClientRect()
+            rects[id] = { left: rect.left, width: rect.width }
+            if (id === sessionId) width = rect.width
+          }
+        }
+        setDrag({ id: sessionId, width, rects })
+      }
+      const endDrag = () => { setDrag(undefined); setDropIndex(null) }
 
       const onDragOver = (event) => {
         /* Accept only the session-row payload the sidebar publishes. Reading the
@@ -874,14 +1201,22 @@ window.__ModuleLoader__.load({
         event.preventDefault()
         const sessionId = event.dataTransfer.getData('text/plain')
         const index = indexForPointer(event.clientX)
-        setDropIndex(null)
+        endDrag()
         /* A text selection drag would also arrive as text/plain: ignore anything
            that is not a Session this client knows. */
         if (sessionId === '' || summaries[sessionId] === undefined) return
         onDropChannel(sessionId, index)
       }
 
-      const indicator = h('div', { style: CSS.dropIndicator, 'data-mixer-drop-indicator': '' })
+      /* The insertion slot: as wide as the dragged pane (plus the 5px grab band it
+         gives up) so the siblings really make room; a sidebar drag has no pane of ours
+         to measure, so it keeps the plain 2px indication (spec §5.3). */
+      const slotWidth = drag === undefined ? 0 : Math.max(0, drag.width) + 5
+      const indicator = h('div', {
+        style: slotWidth > 0 ? { ...CSS.dropSlot, flex: `0 0 ${slotWidth}px` } : CSS.dropIndicator,
+        'data-mixer-drop-indicator': '',
+        'data-mixer-drop-slot': slotWidth > 0 ? 'yes' : 'no',
+      })
 
       return h('div', {
         ref: trackRef,
@@ -908,8 +1243,13 @@ window.__ModuleLoader__.load({
                 onResize,
               }),
           h('div', {
-            style: { ...CSS.trackCell, flex: `${weightOf(weights, id)} 1 0` },
+            style: {
+              ...CSS.trackCell,
+              flex: `${weightOf(weights, id)} 1 0`,
+              ...(drag !== undefined && drag.id === id ? CSS.dragSource : null),
+            },
             'data-mixer-cell': id,
+            'data-mixer-dragging': drag !== undefined && drag.id === id ? 'yes' : 'no',
           },
             h(SessionProvider, { session: refFor(id) },
               h(Pane, {
@@ -920,6 +1260,7 @@ window.__ModuleLoader__.load({
                 views,
                 state: states[id] === undefined ? channelState({}) : states[id],
                 onClose,
+                onDragStateChange: (draggingId) => (draggingId === undefined ? endDrag() : beginDrag(draggingId)),
                 renderFactorySlot,
               }))),
         )),
@@ -934,14 +1275,37 @@ window.__ModuleLoader__.load({
     function MixerPanel(props) {
       const {
         useSessions, useSessionStatus, useWorkspaces, SessionProvider, renderFactorySlot, refFor,
-        backToConversation, startSession, openWorkspace, listViews, sidebar, useStore, actions,
+        backToConversation, createSession, listViews, sidebar, useStore, actions,
+        parkedIds, park, unpark, unparkAll, createdSessions, takePendingFirst,
       } = props
-      /* Channels put away with the x live here, not in the persisted board: "put
-         away for now" is about this sitting, not a preference. */
-      const [hidden, setHidden] = useState([])
+      /* Channels put away with the x live in the PLUGIN scope: not in the persisted
+         board ("put away for now" is about this sitting, not a preference) and not in
+         component state either, because the panel is remounted whenever the mixer
+         takes its centre panel back (ADR-0003). */
+      const parked = parkedIds()
+      /* Which workspace a new Session lands in. `undefined` = follow the first visible
+         channel; a pick in the panel lasts for that one open (spec §5.2). */
+      const [landing, setLanding] = useState(undefined)
+      /* The Session whose composer must own the caret once it is on screen. Explicit,
+         because the host's InputBar auto-focuses every pane and the last mount wins
+         (spec §5.1, requirement 2). */
+      const [focusId, setFocusId] = useState(undefined)
+      /* The last create failure, shown in the top bar. A failed create must not look
+         like a no-op: the host's own entrance reports failures through its notify
+         service, so ours reports through the bar it already owns. */
+      const [createError, setCreateError] = useState(undefined)
+      /* "Insert this Session first" is handed over by the apply-scope reclaim watcher:
+         the panel those channels belonged to has just been unmounted. */
+      const pendingRef = useRef(null)
+      if (pendingRef.current === null) pendingRef.current = takePendingFirst() ?? false
       const board = normalizeBoard(useStore(state => state))
       const channels = board.channels
       const weights = board.weights
+      /* The latest channel list, for callbacks that resolve a frame later (a create
+         promise, the reclaim handover). A closure over `channels` would write back a
+         stale order and silently drop anything the user toggled in between. */
+      const channelsRef = useRef(channels)
+      channelsRef.current = channels
       /* Channels are ours (spec §4.1): until the user owns a board we show the first
          few Sessions, then the dropdown and the per-pane close button own the set. */
       const list = useSessions(state => state)
@@ -973,8 +1337,12 @@ window.__ModuleLoader__.load({
         : []
       const archivedKey = archivedIds.join(',')
       useEffect(() => {
+        /* A Session we created stops being pending the moment its row lands. */
+        for (const id of createdSessions.ids()) if (listIds.includes(id)) createdSessions.forget(id)
         if (channels.length === 0 || listIds.length === 0) return
-        const alive = channels.filter(id => listIds.includes(id) && !archivedIds.includes(id))
+        const pending = createdSessions.ids()
+        const alive = channels.filter(id => (listIds.includes(id) || pending.includes(id))
+          && !archivedIds.includes(id))
         if (alive.length !== channels.length) actions.setChannels(alive)
       }, [channelsKey, listIdsKey, archivedKey])
 
@@ -992,11 +1360,63 @@ window.__ModuleLoader__.load({
         if (stale.length > 0) actions.dropWeights(stale)
       }, [weightIdsKey, listIdsKey, archivedKey])
 
+      /* The reclaim path remounts this panel (ADR-0003), so "the new Session goes
+         first" cannot travel in component state: the apply-scope watcher hands it
+         over. Wait for its list row — the host list fills in asynchronously, and the
+         pruning effect above must not eat an id it has not seen yet. */
+      useEffect(() => {
+        const pending = pendingRef.current
+        if (pending === false || pending === undefined || pending === '') return
+        if (listIds.indexOf(pending) === -1) return
+        pendingRef.current = false
+        acceptNewChannel(pending)
+      }, [pendingRef.current, listIdsKey, channelsKey])
+
+      /* Requirement 2 + Q11(a): the freshly created channel must own the caret. A
+         reused blank Session does not remount, and a reclaim remount auto-focuses
+         every pane with the LAST one winning, so focus is asserted explicitly.
+         Retried across frames on purpose: the pane's composer comes from the host
+         factory and may not be in the DOM in the commit that added the channel, and a
+         one-shot query would silently drop the intent. */
+      const focusTries = useRef(0)
+      useEffect(() => {
+        if (focusId === undefined) return undefined
+        let cancelled = false
+        const attempt = () => {
+          if (cancelled) return
+          const panes = typeof document === 'undefined' || typeof document.querySelectorAll !== 'function'
+            ? []
+            : [...document.querySelectorAll('[data-mixer-pane]')]
+          const pane = panes.find(node => node.getAttribute('data-mixer-pane') === focusId)
+          const field = pane === undefined
+            ? null
+            : pane.querySelector('[contenteditable="true"]') ?? pane.querySelector('input, textarea')
+          if (field !== null && typeof field.focus === 'function') {
+            field.focus()
+            focusTries.current = 0
+            setFocusId(undefined)
+            return
+          }
+          focusTries.current += 1
+          /* Give up quietly rather than stealing focus forever if the pane never
+             renders its composer; the intent is bounded, not swallowed. */
+          if (focusTries.current > FOCUS_RETRY_FRAMES) {
+            focusTries.current = 0
+            setFocusId(undefined)
+            return
+          }
+          if (typeof requestAnimationFrame === 'function') requestAnimationFrame(attempt)
+          else if (typeof setTimeout === 'function') setTimeout(attempt, 16)
+        }
+        attempt()
+        return () => { cancelled = true }
+      }, [focusId, channelsKey])
+
       const visible = channels.length > 0 ? channels : listIds.slice(0, PANE_LIMIT)
       const currentBoard = channels.length > 0 ? channels : visible
       const attention = {}
       const states = {}
-      ;[...visible, ...hidden].forEach(id => {
+      ;[...visible, ...parked].forEach(id => {
         /* Retain every channel we are tracking, including ones closed away from the
            layout: the waiting signal only exists for retained Sessions, so dropping
            the reference on close would silently stop the alerts (spec §4.2). */
@@ -1020,39 +1440,72 @@ window.__ModuleLoader__.load({
           completed: entry !== undefined && entry.completionUnread === true,
         })
       })
-      const hiddenWaiting = hidden.filter(id => attention[id] !== undefined).length
-      const currentWorkspaceId = workspaces.length === 0
-        ? undefined
-        : (() => {
-            const current = visible[0] === undefined ? undefined : summaries[visible[0]]
-            const byPath = current === undefined ? undefined : workspaces.find(w => w.path === current.cwd)
-            return byPath === undefined ? workspaces[0].workspaceId : byPath.workspaceId
-          })()
+      const hiddenWaiting = parked.filter(id => attention[id] !== undefined).length
+      /* Requirement 4: the bar shows no workspace name, so this value exists only to
+         answer "where does ＋新建会话 land" — the first visible channel's workspace, or
+         the one picked in the panel for this open. */
+      const landingId = landing === undefined
+        ? landingWorkspace(workspaces, summaries, visible[0])
+        : landing
+      const landingItem = workspaces.find(workspace => workspace.workspaceId === landingId)
 
       const toggleChannel = (sessionId) => {
+        unpark(sessionId)
         if (currentBoard.includes(sessionId)) {
           actions.setChannels(currentBoard.filter(id => id !== sessionId))
-          setHidden(hidden.filter(id => id !== sessionId))
           return
         }
         actions.setChannels([...currentBoard, sessionId])
-        setHidden(hidden.filter(id => id !== sessionId))
       }
       const closeChannel = (sessionId) => {
         actions.setChannels(visible.filter(id => id !== sessionId))
-        setHidden(hidden.includes(sessionId) ? hidden : [...hidden, sessionId])
+        park(sessionId)
       }
       const restoreHidden = () => {
-        actions.setChannels([...visible, ...hidden])
-        setHidden([])
+        actions.setChannels([...visible, ...parkedIds()])
+        unparkAll()
+      }
+      /* Requirement 2 (spec §4.1): the new channel goes FIRST, reusing the landing
+         workspace's blank Session when there is one — the host does the same in
+         `reuseOrCreateBlank`, so "new session" does not pile up blank Sessions. */
+      const acceptNewChannel = (sessionId) => {
+        refFor(sessionId)
+        unpark(sessionId)
+        /* Until the host list catalogues it, this id is exempt from the prune below. */
+        createdSessions.note(sessionId)
+        actions.setChannels(moveChannel(channelsRef.current, sessionId, 0))
+        setFocusId(sessionId)
+      }
+      const createChannel = () => {
+        const target = blankTargetFor(list, landingItem, archivedIds)
+        if (target !== undefined) {
+          setCreateError(undefined)
+          acceptNewChannel(target)
+          return
+        }
+        /* `ctx.sessions.create`, not `uiWorkspace.startSession`: the host's path is
+           `openWorkspace → replaceMain(…, 'reveal') → selectPanel(null)`, which would
+           throw the user out of the mixer (ADR-0003). */
+        void createSession(landingId).then((result) => {
+          const sessionId = result === undefined ? undefined : result.sessionId
+          if (sessionId === undefined || sessionId === null || sessionId === '') {
+            /* Silently doing nothing would be worse than the host path it replaces. */
+            setCreateError(result === undefined || result.error === undefined
+              ? '新建会话失败'
+              : `新建会话失败：${errorText(result.error)}`)
+            return
+          }
+          setCreateError(undefined)
+          acceptNewChannel(sessionId)
+        })
       }
       /* One path for both drag gestures: a channel head dragged inside the track and a
          session row dragged in from the sidebar (both publish the SessionId as
          text/plain, see Grid's drop handler). */
       const dropChannel = (sessionId, index) => {
         actions.setChannels(moveChannel(currentBoard, sessionId, index))
-        /* Dropping a channel that was closed earlier brings it back. */
-        setHidden(hidden.filter(id => id !== sessionId))
+        /* Dropping a channel that was put away earlier brings it back. */
+        unpark(sessionId)
       }
       /* Dragging one divider only touches its two neighbours. The store persists on
          change, so the write rate is bounded by the drag itself. */
@@ -1087,17 +1540,22 @@ window.__ModuleLoader__.load({
           + '[data-mixer-pane] [class*="_slot"]>[class*="_frame"]{display:block}}'),
         h(TopBar, {
           channels: visible,
-          hiddenCount: hidden.length,
+          hiddenCount: parked.length,
           hiddenWaiting,
+          parked,
           attention,
           onRestoreHidden: restoreHidden,
           backToConversation,
           workspaces,
           sessions: summaries,
-          currentWorkspaceId,
+          landingId,
+          landingTitle: landingItem === undefined ? undefined : landingItem.title,
+          /* Each open starts from the derived landing, so a pick lasts one open. */
+          onPanelOpened: () => setLanding(undefined),
+          onPickLanding: (workspaceId) => setLanding(workspaceId),
           onToggleChannel: toggleChannel,
-          onSwitch: (workspaceId) => openWorkspace(workspaceId),
-          onNewSession: (workspaceId) => startSession(workspaceId),
+          onNewSession: createChannel,
+          createError,
         }),
         visible.length === 0
           ? h('div', { style: CSS.empty },
@@ -1164,6 +1622,10 @@ window.__ModuleLoader__.load({
       subagentCatalogOf,
       normalizeBoard,
       moveChannel,
+      heroFor,
+      landingWorkspace,
+      blankTargetFor,
+      shouldReclaimPanel,
       resizedWeights,
       crumbsFor,
       createBoardStore,
@@ -1175,12 +1637,15 @@ window.__ModuleLoader__.load({
 
     return {
       __test: seams,
-      /* Service edges this entry needs at apply time. `commandUi` is deliberately NOT
-         here: it is provided later than this entry, so it is awaited with ctx.inject
-         below. Declaring it would leave the entry pending on a boot that never
-         provides it, and reading it unguarded THROWS in Cordis (docs/plugin-gotchas.md
-         §1: one such read failed the whole Web boot). */
-      inject: ['slots', 'sessions', 'layout', 'uiWorkspace'],
+      /* Service edges this entry needs at apply time. `uiWorkspace` is deliberately
+         gone: creating a Session goes through `ctx.sessions.create` instead, because
+         the host's `startSession` reveals it and that reveal leaves the mixer
+         (ADR-0003). `commandUi` is deliberately NOT here: it is provided later than
+         this entry, so it is awaited with ctx.inject below. Declaring it would leave
+         the entry pending on a boot that never provides it, and reading it unguarded
+         THROWS in Cordis (docs/plugin-gotchas.md §1: one such read failed the whole
+         Web boot). */
+      inject: ['slots', 'sessions', 'layout'],
       apply(ctx) {
         const refs = new Map()
         const refFor = (sessionId) => {
@@ -1206,6 +1671,143 @@ window.__ModuleLoader__.load({
         const boardStore = createBoardStore()
         const sidebar = createSidebar(ctx)
 
+        /* Requirement 2 / ADR-0003: create the Session ourselves. The host's
+           `uiWorkspace.startSession` REVEALS the new Session (`replaceMain(…,
+           'reveal')` → `selectPanel(null)`, navigation.ts:433) — that is exactly the
+           "creating a session throws me back to the regular view" the user reported.
+           `ctx.sessions.create` only catalogues it; the channel below is the reveal.
+           Failures resolve to `{ error }` rather than rejecting: the host's own path
+           surfaces them through its notify service, so this one must tell the user
+           too instead of silently doing nothing (spec §5.2). */
+        const createSession = (workspaceId) => {
+          const options = workspaceId === undefined ? {} : { workspaceId }
+          return ctx.sessions.create(options).then(
+            sessionId => ({ sessionId }),
+            (error) => {
+              console.error('[mixer] session create failed', error)
+              return { error }
+            },
+          )
+        }
+
+        /* "Put away with the x" is plugin-scope state: it must outlive a panel
+           remount (ADR-0003) without ever being persisted (spec §5.3). */
+        const parked = new Set()
+        const parkedIds = () => [...parked]
+        const park = (sessionId) => { parked.add(sessionId) }
+        const unpark = (sessionId) => { parked.delete(sessionId) }
+        const unparkAll = () => { parked.clear() }
+
+        /* Sessions THIS plugin created, until the host list catches up with them. The
+           prune effect drops channels that are gone from the list, and a freshly
+           created id is briefly absent from it — without this exemption the new channel
+           would be pruned away the instant it was added. The panel gets one handle
+           rather than the three operations as separate props. */
+        const created = new Set()
+        const createdSessions = {
+          note: (sessionId) => { created.add(sessionId) },
+          forget: (sessionId) => { created.delete(sessionId) },
+          ids: () => [...created],
+        }
+
+        /* The reclaim handshake: the panel is about to be unmounted, so "this Session
+           goes first and owns the caret" waits here for the next mount. */
+        let pendingFirst = undefined
+        const takePendingFirst = () => {
+          const id = pendingFirst
+          pendingFirst = undefined
+          return id
+        }
+
+        /* Host new-session entrances (the 56px rail's own button, `session.new`)
+           cannot be intercepted: they call `selectPanel(null)` on the way out. Take the
+           panel back — but ONLY on that conjunction (the mixer just went blank AND a
+           brand-new Session appeared with it). A user leaving on purpose looks
+           identical on the panel side, so the fresh-Session set carries the weight
+           (spec §5.1, ADR-0003). The window only bounds how long the two halves may be
+           apart; it is not a licence to reclaim later. */
+        const RECLAIM_WINDOW_MS = 2000
+        const knownIds = new Set(ctx.sessions.list.getSnapshot().ids ?? [])
+        let freshIds = []
+        let freshAt = 0
+        let leftMixerAt = 0
+        let previousPanelId = ctx.layout.panelInfo.getSnapshot().activePanelId
+        const noteFreshSessions = () => {
+          const ids = ctx.sessions.list.getSnapshot().ids ?? []
+          const inMixer = ctx.layout.panelInfo.getSnapshot().activePanelId === PANEL_ID
+          for (const id of ids) {
+            if (knownIds.has(id)) continue
+            knownIds.add(id)
+            /* Only ids that appear WHILE the mixer is the panel can be evidence for
+               leaving it. A cold boot's list burst (or anything created by a Session we
+               made ourselves) arrives while another view is up, and must never summon
+               the mixer later. */
+            if (!inMixer) continue
+            if (created.has(id)) continue
+            freshIds.push(id)
+          }
+          if (freshIds.length > 0) freshAt = Date.now()
+        }
+        /* The ids the host's own `mainView` convention currently points at. Read-only
+           (docs/adr/0001): this is how the reveal marks the Session it created. */
+        const mainViewIds = () => {
+          const snapshot = ctx.sessions.list.getSnapshot()
+          const rows = snapshot.byId ?? {}
+          const ids = []
+          for (const [id, row] of Object.entries(rows)) {
+            const retained = row === null || row === undefined ? undefined : row.retainedBy
+            const count = retained === null || retained === undefined ? undefined : retained.mainView
+            if (typeof count === 'number' && count > 0) ids.push(id)
+          }
+          return ids
+        }
+        const maybeReclaim = () => {
+          /* Both halves are recency-bounded: a Session that appeared long ago is not
+             evidence for the exit we are looking at. */
+          if (freshAt !== 0 && Date.now() - freshAt > RECLAIM_WINDOW_MS) {
+            freshIds = []
+            freshAt = 0
+          }
+          const activePanelId = ctx.layout.panelInfo.getSnapshot().activePanelId
+          const leftMixer = leftMixerAt !== 0 && Date.now() - leftMixerAt <= RECLAIM_WINDOW_MS
+          if (!leftMixer) {
+            leftMixerAt = 0
+            return
+          }
+          const revealed = mainViewIds()
+          if (!shouldReclaimPanel({
+            leftMixer,
+            activePanelId,
+            newSessionIds: freshIds,
+            mainViewIds: revealed,
+          })) return
+          /* The Session to put first is the one the host REVEALED, not merely the last
+             id that happened to appear. */
+          const target = freshIds.filter(id => revealed.indexOf(id) !== -1)
+          pendingFirst = target[target.length - 1]
+          freshIds = []
+          freshAt = 0
+          leftMixerAt = 0
+          ctx.layout.selectPanel(PANEL_ID)
+        }
+        ctx.effect(() => {
+          const stopList = ctx.sessions.list.subscribe(() => {
+            noteFreshSessions()
+            maybeReclaim()
+          })
+          const stopPanel = ctx.layout.panelInfo.subscribe(() => {
+            const activePanelId = ctx.layout.panelInfo.getSnapshot().activePanelId
+            if (previousPanelId === PANEL_ID && activePanelId === null) leftMixerAt = Date.now()
+            else if (activePanelId !== null) leftMixerAt = 0
+            previousPanelId = activePanelId
+            maybeReclaim()
+          })
+          return () => {
+            stopList()
+            stopPanel()
+          }
+        })
+
         ctx.slots.inject('conversation.session.header.utilities', () => ctx.slots.register({
           name: 'conversation.session.header.utilities',
           id: 'mixer-toggle',
@@ -1225,8 +1827,13 @@ window.__ModuleLoader__.load({
           inject: () => ({
             refFor,
             backToConversation: () => ctx.layout.selectPanel('conversation'),
-            startSession: (workspaceId) => ctx.uiWorkspace.startSession(workspaceId),
-            openWorkspace: (workspaceId) => ctx.uiWorkspace.openWorkspace(workspaceId),
+            createSession,
+            parkedIds,
+            park,
+            unpark,
+            unparkAll,
+            createdSessions,
+            takePendingFirst,
             sidebar,
             /* Read the registered conversation views for the tab row. Guarded because
                `entries` is not part of the catalogued service face, even though

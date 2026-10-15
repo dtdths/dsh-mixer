@@ -99,9 +99,23 @@ function makeContext({ withCommandUi }) {
     inject: (key, callback) => { callback() },
     register: (options) => { registrations.push(options); return () => {} },
   })
-  root.provide('sessions', { retain: () => ({ ready: Promise.resolve(), release: () => {} }) })
-  root.provide('layout', { selectPanel: () => {}, toggleSidebar: () => {} })
-  root.provide('uiWorkspace', { startSession: () => {}, openWorkspace: () => {} })
+  root.provide('sessions', {
+    retain: () => ({ ready: Promise.resolve(), release: () => {} }),
+    create: () => Promise.resolve('created'),
+    /* The list store the plugin watches from apply (spec §5.1 / ADR-0003). */
+    list: {
+      getSnapshot: () => ({ ids: [], byId: {}, phase: 'ready', projectionsBySession: {} }),
+      subscribe: () => () => {},
+    },
+  })
+  root.provide('layout', {
+    selectPanel: () => {},
+    toggleSidebar: () => {},
+    panelInfo: {
+      getSnapshot: () => ({ activePanelId: null }),
+      subscribe: () => () => {},
+    },
+  })
   if (withCommandUi) {
     root.provide('commandUi', { register: (contribution) => { commands.push(contribution); return () => {} } })
   }

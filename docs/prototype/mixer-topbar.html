@@ -1,0 +1,622 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>dsh-mixer 顶栏原型 v0 —— A/B/C 对照</title>
+<style>
+/* ------------------------------------------------------------------
+   一次性设计原型（throwaway）。目标只有一个：让「顶栏三个方向」
+   可以被点击着比较。它不复刻宿主真实组件，只复刻几何、层级、文案与
+   交互次序；token 名对齐 --dsw-alias-*，换主题就是换那几行变量。
+
+   ⚠️ 这里的圆角**故意**用 8–12px：它在模拟宿主面板与弹层自己的观感。
+   spec §5.5 的「圆角两档锁（表面 0 / 交互 999）」约束的是**插件真实 UI**，
+   不是这份拿来讨论形态的 mock；落地实现按 §5.5 走。
+   ------------------------------------------------------------------ */
+:root{
+  --dsw-alias-bg-base:#ffffff;
+  --dsw-alias-bg-layer-1:#f6f7f9;
+  --dsw-alias-bg-layer-2:#eceef2;
+  --dsw-alias-border-l1:#e4e6ea;
+  --dsw-alias-border-l2:#cfd3d9;
+  --dsw-alias-label-primary:#1a1c20;
+  --dsw-alias-label-secondary:#6b7078;
+  --dsw-alias-brand-primary:#3b6ef6;
+  --dsw-alias-state-warn-primary:#c8791a;
+  --dsw-alias-state-business-primary:#3b6ef6;
+  --dsw-alias-state-done-primary:#2f9e63;
+  --dsw-radius-panel:12px;
+  --rail:56px;
+}
+[data-theme="dark"]{
+  --dsw-alias-bg-base:#17181b;
+  --dsw-alias-bg-layer-1:#1e2024;
+  --dsw-alias-bg-layer-2:#262930;
+  --dsw-alias-border-l1:#2c2f36;
+  --dsw-alias-border-l2:#3a3e47;
+  --dsw-alias-label-primary:#eceef2;
+  --dsw-alias-label-secondary:#9aa0aa;
+  --dsw-alias-brand-primary:#6d95ff;
+  --dsw-alias-state-warn-primary:#e0a33c;
+  --dsw-alias-state-business-primary:#6d95ff;
+  --dsw-alias-state-done-primary:#4fbd82;
+}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%}
+body{
+  font:13px/1.6 -apple-system,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+  background:#8b9099;color:var(--dsw-alias-label-primary);
+  display:flex;flex-direction:column;
+}
+
+/* ---- demo 控制条（不属于被演示的界面） ---- */
+.demo-bar{
+  display:flex;align-items:center;gap:14px;flex-wrap:wrap;
+  padding:10px 14px;background:#22252b;color:#fff;font-size:12.5px;
+}
+.demo-bar strong{font-size:13px}
+.switcher{display:flex;gap:6px}
+.switcher button{
+  font:12.5px/1 inherit;padding:7px 11px;border-radius:999px;cursor:pointer;
+  border:1px solid #4a4f59;background:#2c3038;color:#e8eaee;
+}
+.switcher button[aria-pressed="true"]{background:#fff;color:#1a1c20;border-color:#fff;font-weight:600}
+.demo-bar label{display:flex;align-items:center;gap:5px;cursor:pointer}
+.demo-note{color:#aeb4be;flex:1;min-width:220px}
+
+/* ---- 被演示的应用框 ---- */
+.app{
+  flex:1;min-height:0;margin:14px;display:flex;overflow:hidden;
+  background:var(--dsw-alias-bg-base);
+  border:1px solid var(--dsw-alias-border-l2);border-radius:10px;
+  box-shadow:0 10px 30px rgba(0,0,0,.28);position:relative;
+}
+.rail{
+  width:var(--rail);flex:0 0 var(--rail);display:flex;flex-direction:column;
+  align-items:center;gap:4px;padding:8px 0;border-right:1px solid var(--dsw-alias-border-l1);
+  background:var(--dsw-alias-bg-layer-1);
+}
+.rail .brand{
+  width:26px;height:26px;border-radius:999px;background:var(--dsw-alias-label-primary);
+  color:var(--dsw-alias-bg-base);display:grid;place-items:center;font-size:11px;font-weight:700;
+}
+.rail .ric{
+  width:34px;height:34px;display:grid;place-items:center;border-radius:999px;
+  border:0;background:transparent;color:var(--dsw-alias-label-secondary);cursor:pointer;font-size:15px;
+}
+.rail .ric:hover{background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary)}
+.rail .ric.on{background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary)}
+.rail .grow{flex:1}
+.stage{flex:1;min-width:0;display:flex;flex-direction:column}
+
+/* ---- 顶栏 ---- */
+.topbar{
+  flex:0 0 auto;display:flex;align-items:center;gap:8px;
+  padding:9px 12px;border-bottom:1px solid var(--dsw-alias-border-l1);
+  background:var(--dsw-alias-bg-base);position:relative;z-index:30;
+}
+.topbar .title{font-weight:600}
+.topbar .divider{width:1px;height:18px;background:var(--dsw-alias-border-l1)}
+.topbar .spacer{flex:1}
+.btn{
+  font:12.5px/1 inherit;padding:7px 10px;border-radius:999px;cursor:pointer;
+  border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-1);
+  color:var(--dsw-alias-label-primary);display:inline-flex;align-items:center;gap:6px;
+}
+.btn:hover{background:var(--dsw-alias-bg-layer-2)}
+.btn.primary{background:var(--dsw-alias-brand-primary);border-color:var(--dsw-alias-brand-primary);color:#fff;font-weight:600}
+.btn.on{background:var(--dsw-alias-bg-layer-2);border-color:var(--dsw-alias-border-l2)}
+.btn.ghost{background:transparent;border-color:transparent;color:var(--dsw-alias-label-secondary)}
+.btn.ghost:hover{background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary)}
+.chip{
+  display:inline-flex;align-items:center;gap:6px;padding:5px 9px;border-radius:999px;
+  background:var(--dsw-alias-bg-layer-1);border:1px solid var(--dsw-alias-border-l1);
+  font-size:12px;color:var(--dsw-alias-label-secondary);
+}
+.chip.warn{color:var(--dsw-alias-label-primary);border-color:color-mix(in srgb,var(--dsw-alias-state-warn-primary) 40%,transparent)}
+.chip.bttn{cursor:pointer}
+.chip .dot{width:7px;height:7px;border-radius:999px;background:var(--dsw-alias-state-warn-primary)}
+.kbd{font:11px/1 ui-monospace,Menlo,monospace;padding:3px 5px;border:1px solid var(--dsw-alias-border-l2);border-radius:5px;color:var(--dsw-alias-label-secondary)}
+
+/* popover / 抽屉 */
+.pop{
+  position:absolute;top:calc(100% + 6px);left:12px;z-index:40;
+  background:var(--dsw-alias-bg-base);border:1px solid var(--dsw-alias-border-l2);
+  border-radius:var(--dsw-radius-panel);box-shadow:0 16px 40px rgba(0,0,0,.22);
+  overflow:hidden;
+}
+.pop .hd{padding:9px 12px;border-bottom:1px solid var(--dsw-alias-border-l1);font-size:11.5px;color:var(--dsw-alias-label-secondary)}
+.pop .search{display:flex;align-items:center;gap:7px;padding:9px 12px;border-bottom:1px solid var(--dsw-alias-border-l1)}
+.pop .search input{
+  flex:1;font:12.5px/1 inherit;padding:7px 9px;border-radius:8px;
+  border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-1);
+  color:var(--dsw-alias-label-primary);outline:none;
+}
+.pop .search input:focus{border-color:var(--dsw-alias-state-business-primary)}
+.pop .rows{max-height:330px;overflow:auto;padding:6px}
+.pop .foot{padding:9px 12px;border-top:1px solid var(--dsw-alias-border-l1);display:flex;gap:8px;align-items:center}
+.pop.two{display:flex}
+.pop.two .col-l{width:196px;border-right:1px solid var(--dsw-alias-border-l1);padding:6px 0}
+.pop.two .col-r{width:300px;display:flex;flex-direction:column}
+.row{
+  display:flex;align-items:center;gap:8px;padding:7px 9px;border-radius:8px;cursor:pointer;
+}
+.row:hover{background:var(--dsw-alias-bg-layer-1)}
+.row.on{background:var(--dsw-alias-bg-layer-2)}
+.row .cb{
+  width:15px;height:15px;flex:0 0 15px;border-radius:4px;border:1.5px solid var(--dsw-alias-border-l2);
+  display:grid;place-items:center;font-size:11px;color:#fff;
+}
+.row .cb.checked{background:var(--dsw-alias-brand-primary);border-color:var(--dsw-alias-brand-primary)}
+.row .t{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.row .sub{font-size:11px;color:var(--dsw-alias-label-secondary)}
+.row .wdot{width:7px;height:7px;border-radius:999px;background:var(--dsw-alias-state-warn-primary);flex:0 0 7px}
+.row .tag{font-size:10.5px;padding:2px 6px;border-radius:999px;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-secondary)}
+.wsrow{display:flex;align-items:center;gap:7px;padding:7px 10px;cursor:pointer;border-radius:8px}
+.wsrow:hover{background:var(--dsw-alias-bg-layer-1)}
+.wsrow.on{background:var(--dsw-alias-bg-layer-2);font-weight:600}
+.wsrow .path{font-size:10.5px;color:var(--dsw-alias-label-secondary)}
+
+/* 常驻抽屉（变体 C） */
+.drawer{
+  flex:0 0 258px;width:258px;border-right:1px solid var(--dsw-alias-border-l1);
+  background:var(--dsw-alias-bg-layer-1);display:flex;flex-direction:column;min-height:0;
+}
+.drawer .dh{padding:10px 12px;display:flex;align-items:center;gap:8px;border-bottom:1px solid var(--dsw-alias-border-l1)}
+.drawer .db{overflow:auto;padding:6px}
+.drawer .grp{padding:7px 10px 3px;font-size:10.5px;color:var(--dsw-alias-label-secondary)}
+.workarea{flex:1;min-width:0;display:flex;min-height:0}
+
+/* ---- 通道轨道 ---- */
+.track{flex:1;display:flex;min-height:0;overflow-x:auto;overflow-y:hidden;background:var(--dsw-alias-border-l1)}
+.cell{flex:1 1 0;min-width:340px;display:flex;flex-direction:column;min-height:0;background:var(--dsw-alias-bg-base);position:relative}
+.cell + .cell{border-left:5px solid var(--dsw-alias-border-l1)}
+.pane{flex:1;display:flex;flex-direction:column;min-height:0;overflow:hidden}
+.head{
+  flex:0 0 auto;display:flex;align-items:center;gap:8px;padding:7px 12px;
+  border-bottom:1px solid var(--dsw-alias-border-l1);white-space:nowrap;overflow:hidden;cursor:grab;
+}
+.head.waiting{box-shadow:inset 2px 0 0 0 var(--dsw-alias-state-warn-primary)}
+.head .nm{font-size:13.5px;font-weight:600;overflow:hidden;text-overflow:ellipsis;cursor:pointer}
+.head .x{margin-left:auto;border:0;background:transparent;color:var(--dsw-alias-label-secondary);cursor:pointer;font-size:15px;line-height:1}
+.head .x:hover{color:var(--dsw-alias-label-primary)}
+.spin{
+  width:12px;height:12px;flex:0 0 12px;border-radius:999px;
+  border:1.5px solid color-mix(in srgb,var(--dsw-alias-state-business-primary) 30%,transparent);
+  border-top-color:var(--dsw-alias-state-business-primary);
+}
+.sdot{width:12px;height:12px;flex:0 0 12px;border-radius:999px;background:var(--dsw-alias-state-done-primary)}
+.tabs{flex:0 0 auto;display:flex;gap:2px;padding:0 8px;border-bottom:1px solid var(--dsw-alias-border-l1)}
+.tab{
+  font:12.5px/1 inherit;padding:8px 11px;border:0;background:transparent;cursor:pointer;
+  color:var(--dsw-alias-label-secondary);border-bottom:2px solid transparent;
+}
+.tab.on{color:var(--dsw-alias-label-primary);font-weight:600;border-bottom-color:var(--dsw-alias-border-l2)}
+.pbody{flex:1;min-height:0;display:flex;flex-direction:column;overflow:hidden}
+/* 空会话：hero 居中（Q1 选 a 的样子） */
+.hero{flex:1;display:flex;flex-direction:column;justify-content:center;align-items:center;gap:8px;padding:0 20px 32px}
+.hero .mark{width:34px;height:34px;color:var(--dsw-alias-label-primary)}
+.hero h3{margin:0;font-size:17px;font-weight:600}
+.hero .badge{font-size:10.5px;padding:2px 7px;border-radius:999px;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-secondary)}
+.hero .wsrow{display:flex;gap:6px;align-items:center;font-size:12px;color:var(--dsw-alias-label-secondary)}
+.hero .wsrow .wschip{padding:4px 9px;border-radius:999px;border:1px solid var(--dsw-alias-border-l2);cursor:pointer;color:var(--dsw-alias-label-primary)}
+/* 非空会话 */
+.transcript{flex:1;min-height:0;overflow:auto;padding:14px 16px;display:flex;flex-direction:column;gap:10px}
+.bub{border:1px solid var(--dsw-alias-border-l1);border-radius:10px;padding:8px 10px;background:var(--dsw-alias-bg-layer-1);max-width:88%;font-size:12.5px}
+.bub.me{align-self:flex-end;background:var(--dsw-alias-bg-layer-2)}
+.composer{flex:0 0 auto;padding:8px 12px 12px}
+.card{
+  border:1px solid var(--dsw-alias-border-l2);border-radius:var(--dsw-radius-panel);
+  background:var(--dsw-alias-bg-base);padding:10px 12px;display:flex;flex-direction:column;gap:9px;
+}
+.card:focus-within{outline:2px solid var(--dsw-alias-state-business-primary);outline-offset:0}
+.card input{
+  border:0;background:transparent;outline:none;font:13px/1.5 inherit;color:var(--dsw-alias-label-primary);width:100%;
+}
+.card .tools{display:flex;gap:6px;align-items:center;color:var(--dsw-alias-label-secondary);font-size:11.5px}
+.card .tools .sp{flex:1}
+.card .send{background:var(--dsw-alias-brand-primary);color:#fff;border:0;border-radius:8px;padding:5px 10px;font:12px/1 inherit;cursor:pointer}
+
+/* 空面板提示 */
+.nopane{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;padding:32px;text-align:center}
+.nopane b{font-size:14px}
+.nopane span{color:var(--dsw-alias-label-secondary);max-width:420px}
+
+/* 遮罩：模拟「被宿主导航送回常规视图」 */
+.kick{
+  position:absolute;inset:0;z-index:80;background:color-mix(in srgb,var(--dsw-alias-bg-base) 88%,transparent);
+  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;padding:30px;text-align:center;
+  backdrop-filter:blur(2px);
+}
+.kick code{font:11.5px/1.7 ui-monospace,Menlo,monospace;background:var(--dsw-alias-bg-layer-1);border:1px solid var(--dsw-alias-border-l1);border-radius:8px;padding:8px 10px;text-align:left}
+.toast{
+  position:fixed;left:50%;bottom:26px;transform:translateX(-50%);z-index:99;
+  background:#22252b;color:#fff;font-size:12.5px;padding:9px 14px;border-radius:999px;
+  box-shadow:0 8px 24px rgba(0,0,0,.3);opacity:0;transition:opacity .18s;pointer-events:none;max-width:80vw;
+}
+.toast.on{opacity:1}
+
+/* ---- 底部：让位示意（静态两帧） ---- */
+.section{margin:0 14px 18px;background:#fff;border-radius:10px;padding:14px 16px;color:#1a1c20}
+[data-theme="dark"] .section{background:#1e2024;color:#eceef2}
+.section h3{margin:0 0 4px;font-size:13px}
+.section p{margin:0 0 12px;font-size:12px;color:#6b7078}
+[data-theme="dark"] .section p{color:#9aa0aa}
+.frames{display:flex;gap:18px;flex-wrap:wrap}
+.frame{border:1px dashed #cfd3d9;border-radius:8px;padding:10px}
+.frame .cap{font-size:11px;color:#6b7078;margin-bottom:7px}
+.strip{display:flex;gap:6px;align-items:stretch}
+.mini{
+  width:104px;height:74px;border:1px solid #cfd3d9;border-radius:6px;background:#f6f7f9;
+  display:flex;flex-direction:column;font-size:10.5px;overflow:hidden;
+}
+[data-theme="dark"] .mini{background:#262930;border-color:#3a3e47}
+.mini .mh{display:flex;align-items:center;gap:4px;padding:5px 6px;border-bottom:1px solid #e4e6ea;background:#fff}
+[data-theme="dark"] .mini .mh{background:#1e2024;border-color:#2c2f36}
+.mini .mb{flex:1;background:repeating-linear-gradient(180deg,#e9ebef 0 5px,transparent 5px 11px);opacity:.7}
+.mini.ghost{position:relative;top:-8px;left:8px;opacity:.82;box-shadow:0 8px 18px rgba(0,0,0,.22);transform:rotate(-1.2deg)}
+.mini.src{opacity:.38}
+.gap{
+  width:104px;border:1.5px dashed var(--dsw-alias-state-business-primary);border-radius:6px;
+  display:grid;place-items:center;color:var(--dsw-alias-state-business-primary);font-size:10.5px;background:transparent;
+}
+</style>
+</head>
+<body>
+
+<div class="demo-bar">
+  <strong>dsh-mixer 顶栏原型 v0</strong>
+  <div class="switcher" id="switcher">
+    <button data-v="a" aria-pressed="true">A 拆职责</button>
+    <button data-v="b" aria-pressed="false">B 两栏 popover</button>
+    <button data-v="c" aria-pressed="false">C 常驻抽屉</button>
+  </div>
+  <label><input type="checkbox" id="theme"> 深色</label>
+  <span class="demo-note" id="note"></span>
+</div>
+
+<div class="app" id="app">
+  <aside class="rail">
+    <div class="brand">DS</div>
+    <button class="ric" id="railNew" title="宿主的「新建会话」（轨道轨图标）—— 点它会被送回常规视图">＋</button>
+    <button class="ric on" title="调音台（当前面板）">▦</button>
+    <button class="ric" title="插件">◧</button>
+    <button class="ric" title="自动化任务">◷</button>
+    <span class="grow"></span>
+    <button class="ric" title="设置">⚙</button>
+  </aside>
+  <div class="stage">
+    <div class="topbar" id="topbar"></div>
+    <div class="workarea">
+      <aside class="drawer" id="drawer" style="display:none"></aside>
+      <div class="track" id="track"></div>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h3>Q12 = (b) 让位：样子示意（静态两帧，不是真拖拽）</h3>
+  <p>拖动时整格虚影跟着指针，原格淡出，其它通道实时平移让出一条等宽空槽；落点即空槽位置。真拖拽会在 spike 里用宿主真环境验。</p>
+  <div class="frames">
+    <div class="frame">
+      <div class="cap">拖动中：虚影压在第 1 格上，第 2 格是来源（淡出），右侧让位</div>
+      <div class="strip">
+        <div class="mini ghost"><div class="mh">⠿ 通道 2</div><div class="mb"></div></div>
+        <div class="mini"><div class="mh">⠿ 通道 1</div><div class="mb"></div></div>
+        <div class="mini src"><div class="mh">⠿ 通道 3</div><div class="mb"></div></div>
+      </div>
+    </div>
+    <div class="frame">
+      <div class="cap">落点：空槽画出插入位（2px 指示线仍在槽的左缘）</div>
+      <div class="strip">
+        <div class="mini"><div class="mh">⠿ 通道 1</div><div class="mb"></div></div>
+        <div class="gap">插入位</div>
+        <div class="mini"><div class="mh">⠿ 通道 2</div><div class="mb"></div></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+/* ---------------- mock 数据 ---------------- */
+const WS = [
+  { id:'w1', title:'dsh-mixer', path:'~/code/d/dsh-mixer' },
+  { id:'w2', title:'scratch',   path:'~/code/d/scratch' },
+];
+
+let sessions = [
+  { id:'s1', ws:'w1', title:'调音台插件 / 子任务', state:'waiting', wait:'等待审批', note:'这次改动要顺带把测试也改掉吗？' },
+  { id:'s2', ws:'w1', title:'重构 render 管线',    state:'running', note:'正在改写 seam 层…' },
+  { id:'s3', ws:'w2', title:'数据集清洗脚本',      state:'completed', note:'搞定，跑了一版' },
+  { id:'s4', ws:'w1', title:'（空白会话）',        state:'blank' },
+  { id:'s5', ws:'w2', title:'排查拖拽抖动',        state:'waiting', wait:'等待回答', note:'你希望虚影跟手吗？' },
+];
+
+const S = {
+  variant:'a',
+  channels:['s1','s2'],
+  hidden:['s5'],
+  open:null,            // 'sessions' | 'workspaces' | null
+  query:'',
+  activeWs:'w1',
+  next:6,
+  kicked:false,
+};
+
+/* ---------------- 小工具 ---------------- */
+const $ = id => document.getElementById(id);
+const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const byId = id => sessions.find(s => s.id === id);
+const wsOf = id => { const s = byId(id); return s ? WS.find(w => w.id === s.ws) : undefined; };
+
+function toast(text){
+  const el = $('toast');
+  el.textContent = text;
+  el.classList.add('on');
+  clearTimeout(toast._t);
+  toast._t = setTimeout(() => el.classList.remove('on'), 2600);
+}
+
+/* ---------------- 顶栏 ---------------- */
+const NOTES = {
+  a:'A 拆职责：导航（＋新建会话 / 工作区）与通道集合所有权（会话面板）分家；五个痛点里 ①②④ 直接消失，②③⑤ 靠面板内搜索与标记解决。',
+  b:'B 两栏 popover：一个控件承载全部，左列工作区、右列会话+搜索。结构紧凑，但「新建」仍在二级，触发器命名仍偏"容器"而不是"动作"。',
+  c:'C 常驻抽屉：会话列表常驻在调音台左侧，可搜索、可勾选、可拖入。信息最强，代价是通道区少掉 258px。',
+};
+
+function waitingCount(){ return S.channels.filter(id => byId(id) && byId(id).state === 'waiting').length; }
+
+function chipRow(){
+  const w = waitingCount();
+  const h = S.hidden.length;
+  const hw = S.hidden.filter(id => byId(id) && byId(id).state === 'waiting').length;
+  let out = '';
+  if (w > 0) out += `<span class="chip warn"><span class="dot"></span>${w} 个通道在等你</span>`;
+  if (h > 0) out += `<button class="chip bttn" data-act="restore">${hw > 0 ? `已移出 ${h} 个，其中 ${hw} 个在等你` : `已移出 ${h} 个`}</button>`;
+  return out;
+}
+
+function sessionRows(list){
+  if (list.length === 0) return '<div class="row" style="cursor:default"><span class="sub">没有匹配的会话</span></div>';
+  return list.map(s => {
+    const on = S.channels.includes(s.id);
+    const hid = S.hidden.includes(s.id);
+    return `<div class="row" data-act="toggle" data-id="${s.id}">
+      <span class="cb ${on ? 'checked' : ''}">${on ? '✓' : ''}</span>
+      ${s.state === 'waiting' ? '<span class="wdot"></span>' : ''}
+      <span class="t">${esc(s.title)}</span>
+      ${hid ? '<span class="tag">已移出</span>' : ''}
+      <span class="sub">${esc(wsOf(s.id) ? wsOf(s.id).title : '')}</span>
+    </div>`;
+  }).join('');
+}
+
+function filtered(){
+  const q = S.query.trim();
+  return sessions.filter(s => q === '' || s.title.includes(q));
+}
+
+function sessionsPanel(){
+  const rows = filtered();
+  const groups = WS.map(w => {
+    const mine = rows.filter(s => s.ws === w.id);
+    if (mine.length === 0) return '';
+    return `<div class="grp">${esc(w.title)}</div>${sessionRows(mine)}`;
+  }).join('');
+  return `<div class="pop" style="left:12px;width:352px" data-pop="sessions">
+    <div class="search">🔍<input id="q" placeholder="搜索会话标题…" value="${esc(S.query)}"></div>
+    <div class="rows">${groups || '<div class="row" style="cursor:default"><span class="sub">没有匹配的会话</span></div>'}</div>
+    <div class="foot"><span class="sub">勾选＝放进通道；点「已移出」的行＝放回</span><span class="spacer" style="flex:1"></span></div>
+  </div>`;
+}
+
+function workspacesPanel(asColumn){
+  const rows = WS.map(w => `<div class="wsrow ${w.id === S.activeWs ? 'on' : ''}" data-act="usews" data-id="${w.id}">
+      <span style="flex:1">${esc(w.title)}</span>
+      ${w.id === S.activeWs ? '<span class="tag">新建落点</span>' : '<span class="sub">设为落点</span>'}
+    </div>
+    <div style="padding:0 10px 8px 10px"><span class="path">${esc(w.path)}</span></div>`).join('');
+  if (asColumn) return `<div class="col-l"><div class="hd" style="padding:9px 10px">工作区</div>${rows}</div>`;
+  return `<div class="pop" style="width:280px" data-pop="workspaces"><div class="hd">工作区（决定「＋新建会话」落在哪）</div><div class="rows">${rows}</div></div>`;
+}
+
+function topbarA(){
+  return `
+    <span class="title">调音台</span><span class="divider"></span>
+    <button class="btn primary" data-act="new" title="新建于 ${esc((WS.find(w=>w.id===S.activeWs)||{}).title || '')}">＋ 新建会话</button>
+    <button class="btn ${S.open==='sessions'?'on':''}" data-act="opensessions">会话${S.channels.length ? ` · ${S.channels.length}` : ''}</button>
+    <button class="btn ${S.open==='workspaces'?'on':''}" data-act="openworkspaces">工作区</button>
+    <span class="spacer"></span>
+    ${chipRow()}
+    <button class="btn ghost" data-act="exit">常规视图</button>
+    ${S.open === 'sessions' ? sessionsPanel() : ''}
+    ${S.open === 'workspaces' ? workspacesPanel(false) : ''}`;
+}
+
+function topbarB(){
+  const list = filtered();
+  return `
+    <span class="title">调音台</span><span class="divider"></span>
+    <button class="btn ${S.open==='sessions'?'on':''}" data-act="opensessions">会话 ▾</button>
+    <span class="spacer"></span>
+    ${chipRow()}
+    <button class="btn ghost" data-act="exit">常规视图</button>
+    ${S.open === 'sessions' ? `<div class="pop two" data-pop="sessions">
+      ${workspacesPanel(true)}
+      <div class="col-r">
+        <div class="search">🔍<input id="q" placeholder="搜索会话…" value="${esc(S.query)}"></div>
+        <div class="rows">${list.length ? sessionRows(list) : '<div class="row" style="cursor:default"><span class="sub">没有匹配的会话</span></div>'}</div>
+        <div class="foot"><button class="btn" data-act="new">＋ 在此新建会话</button></div>
+      </div>
+    </div>` : ''}`;
+}
+
+function topbarC(){
+  return `
+    <span class="title">调音台</span><span class="divider"></span>
+    <button class="btn ${S.open==='workspaces'?'on':''}" data-act="openworkspaces">工作区</button>
+    <span class="spacer"></span>
+    ${chipRow()}
+    <button class="btn ghost" data-act="exit">常规视图</button>
+    ${S.open === 'workspaces' ? workspacesPanel(false) : ''}`;
+}
+
+function drawerC(){
+  const rows = filtered();
+  const groups = WS.map(w => {
+    const mine = rows.filter(s => s.ws === w.id);
+    if (!mine.length) return '';
+    return `<div class="grp">${esc(w.title)}</div>${sessionRows(mine)}`;
+  }).join('');
+  return `<div class="dh"><strong>会话</strong><span class="spacer" style="flex:1"></span>
+      <button class="btn" data-act="new" title="新建于 ${esc((WS.find(w=>w.id===S.activeWs)||{}).title||'')}">＋</button></div>
+    <div class="search" style="border-bottom:1px solid var(--dsw-alias-border-l1)">🔍<input id="q" placeholder="搜索…" value="${esc(S.query)}"></div>
+    <div class="db">${groups || '<div class="row" style="cursor:default"><span class="sub">没有匹配的会话</span></div>'}</div>`;
+}
+
+/* ---------------- 通道 ---------------- */
+function paneBody(s){
+  if (s.state === 'blank'){
+    return `<div class="hero">
+      <svg class="mark" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4">
+        <path d="M3 12c3-4 6-6 9-6s6 2 9 6c-3 4-6 6-9 6s-6-2-9-6z"/><circle cx="12" cy="12" r="1.6" fill="currentColor" stroke="none"/>
+      </svg>
+      <h3>探索未至之境 <span class="badge">预览</span></h3>
+      <div class="wsrow"><span class="wschip">${esc((WS.find(w=>w.id===s.ws)||{}).title||'选择工作区')}</span><span>＋</span></div>
+      <div class="card" style="width:min(100%,420px)" data-composer-card>
+        <input placeholder="发消息或创建任务, / 调用指令, @ 文件或对话">
+        <div class="tools"><span>/</span><span>@</span><span class="sp"></span><button class="send">发送</button></div>
+      </div>
+    </div>`;
+  }
+  return `<div class="transcript">
+      <div class="bub me">${esc(s.title)}：帮我看看这段。 </div>
+      <div class="bub">${esc(s.note || '（对话内容省略）')}</div>
+    </div>
+    <div class="composer"><div class="card" data-composer-card>
+      <input placeholder="发消息或创建任务, / 调用指令, @ 文件或对话">
+      <div class="tools"><span>/</span><span>@</span><span class="sp"></span><button class="send">发送</button></div>
+    </div></div>`;
+}
+
+function dotFor(s){
+  if (s.state === 'running') return '<span class="spin"></span>';
+  if (s.state === 'completed') return '<span class="sdot"></span>';
+  return '';   /* 等待用头部竖条；idle 与空会话什么都不画（spec §4.3b 的唯一有意偏差） */
+}
+
+function renderTrack(){
+  const track = $('track');
+  if (S.channels.length === 0){
+    track.innerHTML = `<div class="nopane"><b>调音台里还没有通道</b><span>用顶栏的「会话」勾选要关注的会话；被 × 移出的不会停下，仍在等你的话顶栏会提示。</span></div>`;
+    return;
+  }
+  track.innerHTML = S.channels.map(id => {
+    const s = byId(id);
+    if (!s) return '';
+    return `<div class="cell" data-mixer-pane="${id}"><div class="pane">
+      <div class="head ${s.state === 'waiting' ? 'waiting' : ''}" draggable="true" title="拖头部调整顺序">
+        ${dotFor(s)}<span class="nm">${esc(s.title)}</span>
+        <button class="x" data-act="close" data-id="${id}" title="从调音台移除">×</button>
+      </div>
+      <div class="tabs"><button class="tab on">对话</button><button class="tab">轨迹</button></div>
+      <div class="pbody">${paneBody(s)}</div>
+    </div></div>`;
+  }).join('');
+}
+
+/* ---------------- 渲染 ---------------- */
+function render(){
+  $('topbar').innerHTML = S.variant === 'a' ? topbarA() : S.variant === 'b' ? topbarB() : topbarC();
+  const d = $('drawer');
+  if (S.variant === 'c'){ d.style.display = 'flex'; d.innerHTML = drawerC(); }
+  else { d.style.display = 'none'; d.innerHTML = ''; }
+  $('note').textContent = NOTES[S.variant];
+  renderTrack();
+  const q = $('q');
+  if (q){ q.focus(); q.setSelectionRange(q.value.length, q.value.length); }
+}
+
+/* ---------------- 事件 ---------------- */
+document.addEventListener('click', ev => {
+  const sw = ev.target.closest('#switcher button');
+  if (sw){
+    S.variant = sw.dataset.v; S.open = null; S.query = '';
+    [...$('switcher').children].forEach(b => b.setAttribute('aria-pressed', String(b === sw)));
+    render(); return;
+  }
+  const el = ev.target.closest('[data-act]');
+  if (!el) {
+    /* 点空白处关面板 */
+    if (S.open && !ev.target.closest('.pop')) { S.open = null; render(); }
+    return;
+  }
+  const act = el.dataset.act;
+  if (act === 'opensessions'){ S.open = S.open === 'sessions' ? null : 'sessions'; S.query = ''; render(); return; }
+  if (act === 'openworkspaces'){ S.open = S.open === 'workspaces' ? null : 'workspaces'; render(); return; }
+  if (act === 'restore'){ S.channels = S.channels.concat(S.hidden); S.hidden = []; render(); return; }
+  if (act === 'usews'){ S.activeWs = el.dataset.id; toast(`「＋新建会话」的落点改成 ${WS.find(w=>w.id===el.dataset.id).title}`); render(); return; }
+  if (act === 'exit'){ toast('（模拟）回到常规视图'); return; }
+  if (act === 'close'){ const id = el.dataset.id;
+    S.channels = S.channels.filter(x => x !== id);
+    if (!S.hidden.includes(id)) S.hidden.push(id);
+    render(); toast('已移出调音台（会话本身继续跑）'); return; }
+  if (act === 'toggle'){
+    const id = el.dataset.id;
+    if (S.channels.includes(id)) S.channels = S.channels.filter(x => x !== id);
+    else S.channels = S.channels.concat([id]);
+    S.hidden = S.hidden.filter(x => x !== id);
+    render(); return;
+  }
+  if (act === 'new'){
+    const id = 'n' + (S.next++);
+    sessions = [{ id, ws:S.activeWs, title:'（空白会话）', state:'blank' }, ...sessions];
+    S.channels = [id, ...S.channels.filter(x => x !== id)];
+    S.hidden = S.hidden.filter(x => x !== id);
+    S.open = null;
+    render();
+    const input = document.querySelector(`[data-mixer-pane="${id}"] input`);
+    if (input) input.focus();
+    toast('新会话已建为通道并排在第 1 位，光标已落在它的输入框');
+    return;
+  }
+});
+
+document.addEventListener('input', ev => {
+  if (ev.target.id === 'q'){ S.query = ev.target.value; render(); }
+});
+
+$('theme').addEventListener('change', ev => {
+  document.documentElement.dataset.theme = ev.target.checked ? 'dark' : 'light';
+});
+
+/* 模拟：轨道上的「新建会话」= 宿主的入口 → selectPanel(null) → 被送回常规视图 */
+$('railNew').addEventListener('click', () => { S.kicked = true; renderKick(); });
+
+function renderKick(){
+  if (!S.kicked) return;
+  const app = $('app');
+  const old = app.querySelector('.kick');
+  if (old) return;
+  const box = document.createElement('div');
+  box.className = 'kick';
+  box.innerHTML = `<b>（模拟）宿主入口的后果</b>
+    <code>ctx.uiWorkspace.startSession()<br>→ openWorkspace() → replaceMain(…, 'reveal')<br>→ ctx.layout.selectPanel(null)<br>→ activePanelId 变 null，调音台整棵卸载</code>
+    <span style="color:var(--dsw-alias-label-secondary);max-width:460px">这正是需求2 的现象：你在调音台里按轨道的「＋」或 Cmd/Ctrl+Alt+N，就回到了常规视图。</span>
+    <button class="btn primary" id="backToMixer">回到调音台（模拟 Q5(b) 的抢回）</button>`;
+  app.appendChild(box);
+  box.querySelector('#backToMixer').addEventListener('click', () => {
+    S.kicked = false;
+    box.remove();
+    render();
+    toast('面板整棵重挂：滚动位置与焦点重置，光标补到了新格（Q13 的代价）');
+  });
+}
+
+render();
+</script>
+</body>
+</html>

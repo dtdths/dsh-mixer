@@ -56,6 +56,28 @@ test('render: every pane shows its own state marker, and the sidebar parity hold
   assert.match(html, /1 个通道在等你/)
 })
 
+test('render: an empty channel is handed the host hero phase, a live one stays docked (§4.4)', async () => {
+  const { render } = await loadRendered()
+  const withBlank = {
+    ...list,
+    ids: ['s1', 'b1'],
+    byId: {
+      s1: list.byId.s1,
+      b1: { id: 'b1', displayTitle: '（空白）', blank: true, running: false, parentId: undefined, cwd: '/repo' },
+    },
+  }
+  const { html } = render({ board: { channels: ['s1', 'b1'], weights: {} }, list: withBlank, status, workspaces })
+
+  /* The empty channel must reach the factory as `hero`: that phase is what centres the
+     composer, and pinning `active` is exactly the reported "input at the top" bug. */
+  assert.match(html, /data-mixer-cell="b1"[\s\S]*?data-phase="hero"/)
+  assert.match(html, /data-mixer-cell="b1"[\s\S]*?data-hero="yes"/)
+  /* Its neighbour, with history, stays docked. */
+  assert.match(html, /data-mixer-cell="s1"[\s\S]*?data-phase="active"/)
+  assert.equal((html.match(/data-phase="hero"/g) ?? []).length, 1)
+  assert.equal((html.match(/data-phase="active"/g) ?? []).length, 1)
+})
+
 test('render: a silent status source falls back to the list row, the way the sidebar does', async () => {
   const { render } = await loadRendered()
   /* `tree.ts:410` is `status?.running ?? summary.running`: the unified status can exist

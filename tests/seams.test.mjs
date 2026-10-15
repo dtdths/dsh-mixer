@@ -19,6 +19,10 @@ const {
   subagentCatalogOf,
   normalizeBoard,
   moveChannel,
+  heroFor,
+  landingWorkspace,
+  blankTargetFor,
+  shouldReclaimPanel,
   resizedWeights,
   crumbsFor,
   createBoardStore,
@@ -183,4 +187,109 @@ test('createBoardStore: one persisted root board with three write actions', () =
   handle.spec.actions.dropWeights(draft, ['a'])
   assert.deepEqual(draft.weights, { b: 1 })
   assert.deepEqual(draft.channels, ['a', 'b'])
+})
+
+/*
+ * Requirement 1 (spec §4.4): an empty channel must be handed the host's hero phase,
+ * because that phase is what centres the composer. Pinning `hero: false` is the bug
+ * this replaces, so the fallbacks matter as much as the hero case.
+ */
+test('heroFor: a blank Session gets the host hero phase, everything else stays docked', () => {
+  assert.deepEqual(heroFor({ blank: true }), { phase: 'hero', hero: true })
+  assert.deepEqual(heroFor({ blank: false }), { phase: 'active', hero: false })
+  /* An unknown row is not hero on purpose: one frame of the wrong layout is worse
+     than the docked bar. */
+  assert.deepEqual(heroFor(undefined), { phase: 'active', hero: false })
+  assert.deepEqual(heroFor(null), { phase: 'active', hero: false })
+  assert.deepEqual(heroFor({}), { phase: 'active', hero: false })
+})
+
+/*
+ * Requirement 4 (spec §5.2): the top bar shows no workspace name, so the ONLY
+ * consumer of "which workspace" is the landing question. The match is by cwd, like the
+ * host's own workspace lookup; with no channel to go by it mirrors the host's
+ * `recentWorkspace` fallback (newest Session, else the workspace's own createdAt).
+ */
+test('landingWorkspace: the first channel\'s workspace, else the host\'s most recent one', () => {
+  const items = [
+    { workspaceId: 'w1', path: '/a', createdAt: '2026-01-01T00:00:00Z', sessionIds: ['s1'] },
+    { workspaceId: 'w2', path: '/b', createdAt: '2026-01-02T00:00:00Z', sessionIds: ['s2'] },
+  ]
+  const summaries = {
+    s1: { id: 's1', cwd: '/a', updatedAt: 100 },
+    s2: { id: 's2', cwd: '/b', updatedAt: 200 },
+  }
+  assert.equal(landingWorkspace(items, summaries, 's2'), 'w2')
+  assert.equal(landingWorkspace(items, summaries, 's1'), 'w1')
+  /* A channel whose cwd matches nothing falls back to the recent rule, NOT to the first
+     row: w2 holds the newest Session. */
+  assert.equal(landingWorkspace(items, summaries, 's9'), 'w2')
+  assert.equal(landingWorkspace(items, { s9: { id: 's9', cwd: '/nope', updatedAt: 1 } }, 's9'), 'w2')
+  /* Same input with no channel at all: the same recent rule. */
+  assert.equal(landingWorkspace(items, summaries, undefined), 'w2')
+  /* No Session timestamps to go by: the workspace's own createdAt decides. */
+  const bare = {
+    w1: { id: 'w1', cwd: '/a' },
+    w2: { id: 'w2', cwd: '/b' },
+  }
+  assert.equal(landingWorkspace(items, bare, undefined), 'w2')
+  /* Ties (and unparseable createdAt) keep host order, like the host's own loop. */
+  const tied = { ...bare, w2: { id: 'w2', cwd: '/b' } }
+  assert.equal(landingWorkspace([items[1], items[0]], tied, undefined), 'w2')
+  /* No workspace at all: there is nowhere to land. */
+  assert.equal(landingWorkspace([], summaries, 's1'), undefined)
+  assert.equal(landingWorkspace(undefined, summaries, 's1'), undefined)
+})
+
+/*
+ * Requirement 2 (spec §4.1): "new session" reuses a blank Session of the landing
+ * workspace before creating one, mirroring the host's reuseOrCreateBlank.
+ */
+test('blankTargetFor: reuses a listed, unarchived blank Session of that workspace only', () => {
+  const workspace = { workspaceId: 'w1', path: '/a', sessionIds: ['b1', 'b2', 's1'] }
+  const base = {
+    ids: ['s1', 'b1', 'b2'],
+    byId: {
+      s1: { id: 's1', blank: false, cwd: '/a' },
+      b1: { id: 'b1', blank: true, cwd: '/a' },
+      b2: { id: 'b2', blank: true, cwd: '/other' },
+    },
+  }
+  assert.equal(blankTargetFor(base, workspace, []), 'b1')
+  /* The blank Session was archived: it is gone, do not reuse it. */
+  assert.equal(blankTargetFor(base, workspace, ['b1']), undefined)
+  /* A blank Session of another directory, or outside the workspace's own list, is
+     not ours to reuse. */
+  assert.equal(blankTargetFor({ ids: ['b2'], byId: base.byId }, workspace, []), undefined)
+  assert.equal(blankTargetFor(base, { ...workspace, sessionIds: ['s1'] }, []), undefined)
+  /* No landing workspace, no list, or no blank row: create instead of reusing. */
+  assert.equal(blankTargetFor(base, undefined, []), undefined)
+  assert.equal(blankTargetFor(undefined, workspace, []), undefined)
+  assert.equal(blankTargetFor({ ids: ['s1'], byId: base.byId }, workspace, []), undefined)
+})
+
+/*
+ * Requirement 2 (spec §5.1 / ADR-0003): reclaiming the centre panel must fire ONLY on
+ * the host's new-session transition. A user leaving on purpose blanks the panel through
+ * the very same `replaceMain(…, 'reveal')`, so the "the host revealed a Session it did
+ * not have before" half carries all the weight.
+ */
+test('shouldReclaimPanel: only the host new-session transition, never a plain exit', () => {
+  const fire = { leftMixer: true, activePanelId: null, newSessionIds: ['n1'], mainViewIds: ['n1'] }
+  assert.equal(shouldReclaimPanel(fire), true)
+  /* Nothing new appeared: the user clicked a sidebar Session row. */
+  assert.equal(shouldReclaimPanel({ ...fire, newSessionIds: [] }), false)
+  /* A fresh Session that the host did NOT reveal is not evidence: it could be a
+     background agent's, or one this plugin created itself. */
+  assert.equal(shouldReclaimPanel({ ...fire, mainViewIds: [] }), false)
+  assert.equal(shouldReclaimPanel({ ...fire, mainViewIds: ['other'] }), false)
+  /* The mixer was not the panel that just went away. */
+  assert.equal(shouldReclaimPanel({ ...fire, leftMixer: false }), false)
+  /* Another panel was selected in between (plugins/schedules): not our business. */
+  assert.equal(shouldReclaimPanel({ ...fire, activePanelId: 'plugins' }), false)
+  /* Missing/garbage input must not throw or reclaim. */
+  assert.equal(shouldReclaimPanel({}), false)
+  assert.equal(shouldReclaimPanel({ leftMixer: true, activePanelId: null, newSessionIds: ['n1'] }), false)
+  assert.equal(shouldReclaimPanel({ ...fire, newSessionIds: 'n1' }), false)
+  assert.equal(shouldReclaimPanel({ ...fire, mainViewIds: 'n1' }), false)
 })

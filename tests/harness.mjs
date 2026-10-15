@@ -173,9 +173,32 @@ export function createHost(definition, { viewEntries = DEFAULT_VIEW_ENTRIES } = 
   const commands = []
   const retained = []
   const released = []
+  const selectPanelCalls = []
+  const createCalls = []
+  let createFailure
+  const listListeners = new Set()
+  const panelListeners = new Set()
+  const disposers = []
+  let listState = { ids: [], byId: {}, phase: 'ready', projectionsBySession: {} }
+  let panelInfoState = { activePanelId: null }
+  /* The two host stores the plugin watches from `apply` (spec §5.1 / ADR-0003). */
+  const setList = (next) => {
+    listState = next
+    for (const listener of [...listListeners]) listener()
+  }
+  const setPanelInfo = (next) => {
+    panelInfoState = next
+    for (const listener of [...panelListeners]) listener()
+  }
   const ctx = {
     inject: (deps, callback) => callback({ commandUi: { register: (contribution) => { commands.push(contribution) } } }),
-    effect: () => () => {},
+    /* Run the effect body the way Cordis does (its returned disposer is kept), so the
+       reclaim watcher really subscribes in tests. */
+    effect: (body) => {
+      const dispose = body()
+      if (typeof dispose === 'function') disposers.push(dispose)
+      return () => {}
+    },
     slots: {
       inject: (key, callback) => { callback() },
       register: (options, component) => { registrations.push({ options, component }); return () => {} },
@@ -186,14 +209,45 @@ export function createHost(definition, { viewEntries = DEFAULT_VIEW_ENTRIES } = 
         retained.push(sessionId)
         return { ready: Promise.resolve(), release: () => released.push(sessionId) }
       },
+      create: (options) => {
+        createCalls.push(options)
+        /* A failing Host is a real path (spec §5.2): make it drivable. */
+        if (createFailure !== undefined) return Promise.reject(createFailure)
+        return Promise.resolve(`created-${createCalls.length}`)
+      },
+      list: {
+        getSnapshot: () => listState,
+        subscribe: (listener) => {
+          listListeners.add(listener)
+          return () => listListeners.delete(listener)
+        },
+      },
     },
-    layout: { selectPanel: () => {}, toggleSidebar: () => {} },
-    uiWorkspace: { startSession: () => {}, openWorkspace: () => {} },
+    layout: {
+      selectPanel: (panelId) => {
+        selectPanelCalls.push(panelId)
+        setPanelInfo({ activePanelId: panelId })
+      },
+      toggleSidebar: () => {},
+      panelInfo: {
+        getSnapshot: () => panelInfoState,
+        subscribe: (listener) => {
+          panelListeners.add(listener)
+          return () => panelListeners.delete(listener)
+        },
+      },
+    },
   }
   definition.apply(ctx)
   const main = registrations.find(entry => entry.options.name === 'main')
   if (main === undefined) throw new Error('main panel was not registered')
-  return { registrations, commands, ctx, retained, released, main }
+  return {
+    registrations, commands, ctx, retained, released, main,
+    selectPanelCalls, createCalls, setList, setPanelInfo,
+    setCreateFailure: (error) => { createFailure = error },
+    panelInfo: () => panelInfoState,
+    dispose: () => { for (const dispose of disposers) dispose() },
+  }
 }
 
 /**
@@ -206,7 +260,14 @@ export function createHost(definition, { viewEntries = DEFAULT_VIEW_ENTRIES } = 
 export function panelProps(main, { instance, list, status, workspaces, renderFactorySlot, React }) {
   return {
     ...main.options.inject(),
-    useStore: selector => selector(instance.getSnapshot()),
+    /* A REAL subscription, not a snapshot read: the panel's own writes must re-render
+       it the way the host's bound store does. A version bump rather than identity,
+       because the engine mutates the draft in place (Object.is would never change). */
+    useStore: (selector) => {
+      const [, bump] = React.useState(0)
+      React.useEffect(() => instance.subscribe(() => bump(version => version + 1)), [])
+      return selector(instance.getSnapshot())
+    },
     actions: instance.actions,
     useSessions: selector => selector(list),
     useSessionStatus: selector => selector(status),
@@ -215,6 +276,8 @@ export function panelProps(main, { instance, list, status, workspaces, renderFac
     renderFactorySlot: renderFactorySlot ?? ((name, input2) => React.createElement('div', {
       'data-factory': name,
       'data-variant': input2.variant,
+      'data-phase': input2.phase,
+      'data-hero': input2.hero === true ? 'yes' : 'no',
     })),
   }
 }
@@ -274,7 +337,7 @@ export async function loadRendered(options = {}) {
  * @returns the mount helper plus everything the caller needs to assert.
  */
 export async function loadInteractive(options = {}) {
-  const { withStore = true, viewEntries = DEFAULT_VIEW_ENTRIES } = options
+  const { withStore = true, viewEntries = DEFAULT_VIEW_ENTRIES, withComposer = true } = options
   const { window } = setupDom()
   const { React, createRoot, act } = hostModules()
   const storeModule = createStoreStub()
@@ -295,8 +358,10 @@ export async function loadInteractive(options = {}) {
     return React.createElement('div', {
       'data-factory': name,
       'data-variant': input.variant,
+      'data-phase': input.phase,
+      'data-hero': input.hero === true ? 'yes' : 'no',
       tabIndex: 0,
-    })
+    }, withComposer ? React.createElement('input', { 'data-composer': '' }) : null)
   }
   let snapshots = { list: undefined, status: new Map(), workspaces: undefined }
   /**
@@ -311,6 +376,9 @@ export async function loadInteractive(options = {}) {
       instance.actions.setWeights(next.board.weights ?? {})
     }
     snapshots = { ...snapshots, ...next }
+    /* The host's list store feeds BOTH the panel's hooks and the plugin's own
+       apply-scope watcher (spec §5.1); one store, so keep them in step. */
+    if (next.list !== undefined) host.setList(next.list)
     act(() => {
       root.render(React.createElement(host.main.component, panelProps(host.main, {
         instance,
