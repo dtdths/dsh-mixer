@@ -1163,6 +1163,7 @@ window.__ModuleLoader__.load({
       resizedWeights,
       crumbsFor,
       createBoardStore,
+      createSidebar,
     }
 
     return {
