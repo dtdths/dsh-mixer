@@ -154,7 +154,7 @@ renderFactorySlot('conversation.content', { variant: 'embedded', phase, hero }, 
 **空会话必须与常规视图同相**（用户 2026-10-15 决定，需求1）：宿主对"没有历史、已 open"的会话自己算 `hero = true` / `phase = 'hero'`（`ui-conversation/.../ConversationMainPanel.tsx:41-43`），并由此得到 `.embeddedBody[data-content-phase='hero'] .scrollBody{justify-content:center}`（`ConversationRoot.module.css:534-538`）——**输入框的竖居中是宿主给的，不是插件画的**。v1 把入参钉成 `{ phase:'active', hero:false }`（`client.js:504`），于是空会话里 `active` 相位的 `.composerSeat{position:sticky;bottom:0}` 在内容比容器短时无处可粘，输入框停在滚动区**顶部**、下面全空——这就是需求1 的根因。
 
 - 判定缝 `heroFor(summary)` 返回 `{ phase, hero }`，判据**照抄宿主**，不另造语义。
-- 边界（诚实记录）：宿主还看会话快照的 `openState` / `awaitingFirstTurn`；插件只拿得到列表摘要的 `blank`，故 `hero` 用 `blank === true` 近似。差异只可能在"正在重放、hero/docked 未定"的那一瞬（宿主此时隐藏 composer，插件会先画 hero）。
+- 边界（诚实记录）：宿主还看会话快照的 `openState` / `awaitingFirstTurn`；插件只拿得到列表摘要的 `blank`，故 `hero` 用 `blank === true` 近似。差异只可能在"正在重放、hero/docked 未定"的那一瞬：**摘要已经是 blank 时**插件会先画 hero，而宿主此刻在隐藏 composer（对 blank 会话两者最终一致）；**摘要还没有这一行时**插件按 `active` 处理（`heroFor(undefined)`），宁可先给停靠条也不闪一下 hero。
 - 380px 窄格里 hero 的品牌标 + 标题是否太吵，看过真机再决定要不要降级成"只居中 composer"。
 
 - **共享工厂**：`conversation.content` 是宿主为多宿主复用准备的工厂，可直接在每格实例化。
@@ -178,10 +178,10 @@ renderFactorySlot('conversation.content', input, { slots: { views: Views } })
 - 进入时把左侧栏折叠（见 §7.1），离开时恢复；**常规视图的状态不丢**（宿主保证）。
 - **新建会话不构成"离开"**（用户 2026-10-15 决定，需求2；理由与代价见 [ADR-0003](./adr/0003-new-session-does-not-leave-the-mixer.md)）：
   - 插件自己的新建入口不走宿主 `startSession`，而是 `ctx.sessions.create({ workspaceId })` + 自己 retain（§4.1）→ 不触发任何宿主导航，因此不需要抢面板。
-  - 宿主的两个入口（56px 轨道上的新建按钮 / `session.new` 快捷键，Web 绑 `primary+alt`）拦不住，改为**窄条件重新断言**：`shouldReclaimPanel({ leftMixer, activePanelId, newSessionIds, mainViewIds })` 为真时才 `selectPanel('mixer')`。三条件同时成立 —— 调音台是当前面板且刚被置空、**在调音台还是当前面板期间**出现了新的会话 id、且这些新 id 里有一个**正是宿主 `mainView` 现在指向的**（`replaceMain` 的 reveal 就是这么标记它的）。**绝不做无条件抢回**：那会把"点侧栏会话行主动离开"也吃掉。
-    - 为什么"新 id + mainView"两半都不能省：点侧栏会话行走的是**同一个** `replaceMain(…, 'reveal')` + `selectPanel(null)`，光看面板变空分不出来；而"只是冒出个新会话"也不够——后台智能体、别的窗口、以及**本插件自己 `create` 出来的会话**都会冒新 id。只有"刚被编目 **且** 立刻成为 `mainView`"是宿主新建路径独有的。读 `mainView` 派生的集合是允许的（只读，[ADR-0001](./adr/0001-mixer-owns-its-session-reference-source.md)），写它依然绝对禁止。
-    - 冷启动那份列表批量到达时面板**不是**调音台，故一律不计入证据（否则冷启动后 2 秒内一次主动离开就可能被抢回）；**本插件自己 `create` 出来的会话**同样不计入（用户完全可能在新建之后、2 秒之内主动离开调音台，那条不该被抢回）。
-    - 已知边界：宿主 `reuseOrCreateBlank` 复用已有空白会话时没有新 id，窄条件会漏（v1 接受）。
+  - 宿主的两个入口（56px 轨道上的新建按钮 / `session.new` 快捷键，Web 绑 `primary+alt`）拦不住，改为**窄条件重新断言**：`shouldReclaimPanel({ leftMixer, activePanelId, revealed })` 为真时才 `selectPanel('mixer')`。条件 —— **调音台刚被置空**（`leftMixer`，2 秒时效窗内）、**面板现在确实是空的**（`activePanelId === null`）、且**宿主 `mainView` 现在指向的那个会话是空白的**（`revealed = { id, blank }`）。命中时把那个会话插到第 0 位。**绝不做无条件抢回**：那会把"点侧栏会话行主动离开"也吃掉。
+    - 判据为什么是"空白"而不是"新 id"：宿主 `reuseOrCreateBlank`（navigation.ts:185-198）**会复用已有空白会话**而不是新建，而我们自己的 `＋` 恰好就留下一个空白会话 —— 用"是否出现新 id"判断，会在**最常见的连续第二次新建**上漏掉，用户照样被踢回常规视图（这正是需求2 的原症状）。而"点侧栏会话行"走的是**同一个** `replaceMain(…, 'reveal')` + `selectPanel(null)`，区别正在于它揭示的会话**有历史**。
+    - 读 `mainView` 派生的集合是允许的（只读，[ADR-0001](./adr/0001-mixer-owns-its-session-reference-source.md)），写它依然绝对禁止。短暂同时有两个 `mainView` 引用时取**空白的那个**（那是 reveal 的目标）。
+    - 已知边界（v1 接受）：**故意**点一个空白会话的侧栏行离开调音台时，判据分辨不出，会被带回调音台（侧栏在调音台里是折叠的，行本身要先手动展开才可点）。
   - 重挂代价（必须一并处理）：① 每格滚动位置回顶 —— 不可修，接受；② 「移出」集合（`×` 移出的通道，代码 `parked`）必须移出组件 state 到**插件作用域**，否则弹回；③ 重挂后每格的 composer 都会自动聚焦、最后挂载者赢，必须显式把焦点补到新格。
   - ⚠️ 「切换到此工作区」**已删除**：它调 `ctx.uiWorkspace.openWorkspace()`，走同一条 reveal → `selectPanel(null)`。工作区在 `会话` 浮层左列只承担"新建落点"（§5.2）。
 
@@ -191,7 +191,7 @@ renderFactorySlot('conversation.content', input, { slots: { views: Views } })
 
 - **顶栏不出现具体工作区名**（用户决定）：工作区是"新建落到哪"的实现细节，不是顶栏的主语 —— `调音台` 是总体的。
 - **`会话` = 两栏浮层**（用户 2026-10-15 选定方案 B；一次性原型见 `docs/prototype/mixer-topbar.html`）：
-  - 左列 = 工作区列表，**唯一职责是"新建落点"**（决定「＋在此新建会话」建到哪）。打开时默认选中**第一个通道所属的工作区**（`landingWorkspace()`：第一个通道的 cwd 反查工作区；反查不到或通道为空时，**照抄宿主自己的 `recentWorkspace` 判据**——该工作区最新会话的 `updatedAt`，没有会话则用工作区 `createdAt`，并列时按宿主顺序。宿主没把 `recentWorkspace` 出到插件面，所以这里是同判据的镜像实现）。行上标「新建落点」，点击＝设为落点。**没有**「切换到此工作区」（见 §5.1 末条）。
+  - 左列 = 工作区列表，**唯一职责是"新建落点"**（决定「＋在此新建会话」建到哪）。打开时默认选中**第一个已归你所有的通道所属的工作区**（`landingWorkspace()` 取 `channels[0]`，不是兜底预览格；第一个通道的 cwd 反查工作区；反查不到或通道为空时，**照抄宿主自己的 `recentWorkspace` 判据**——该工作区最新会话的 `updatedAt`，没有会话则用工作区 `createdAt`，并列时按宿主顺序。宿主没把 `recentWorkspace` 出到插件面，所以这里是同判据的镜像实现）。行上标「新建落点」，点击＝设为落点。**没有**「切换到此工作区」（见 §5.1 末条）。
   - 右列 = 搜索框 + 会话多选（勾选即入/出通道，行上带等待标记与「已移出」态）+ 底部「＋ 在此新建会话」。
   - 搜索：**本地按标题过滤**（即时、零依赖）。走宿主 `sessions.search` 的全文搜索是二期（§9.1）。
   - 关闭：`Esc`、点浮层外、或再点触发器；触发器要有 `aria-expanded`，面板要有 `role`。
@@ -314,7 +314,7 @@ e.dataTransfer.setData('text/plain', node.id)   // node.id 就是 SessionId
 11. **不要继承原型的结论**：这份清单现在跑的**就是根包**（`feat/mixer-v1`）。原型时期的通过记录只说明机制可行，不能当成这十条的验收 —— 尤其第 2 条和"并排/独立"两条。
 
 12. **空会话居中**（需求1）：新建一个还没说话的会话通道 → 输入框**竖居中**，上方是宿主的 hero 标题与工作区行；发出第一条消息后输入框**自动回到底部**停靠，不闪跳。
-13. **新建不离开调音台**（需求2）：从 `会话` 浮层底部新建、按 56px 轨道上的新建按钮、按 `Cmd/Ctrl+Alt+N` —— **三个入口都留在调音台**，新会话成为**第 0 个通道**且光标在它的输入框里；`×` 移出的通道不因此弹回；每格滚动位置回顶属已知代价（§5.1）。
+13. **新建不离开调音台**（需求2）：从 `会话` 浮层底部新建、按 56px 轨道上的新建按钮、按 `Cmd/Ctrl+Alt+N` —— **三个入口都留在调音台**（含宿主**复用已有空白会话**那一路，§5.1），新会话成为**第 0 个通道**且光标在它的输入框里；`×` 移出的通道不因此弹回；每格滚动位置回顶属已知代价（§5.1）。
 14. **虚影与让位**（需求3）：拖头部时虚影是**整个通道**（不是只有头部），原格半透明；拖动经过时其它通道让出空槽；拖到窗口外或按 `Esc` 取消后，原格透明度复原、不留空槽。
 15. **顶栏 B**（需求4）：顶栏只写 `调音台`，不出现具体工作区名；`会话` 浮层左列点一下只改「新建落点」且**不会离开调音台**；右列搜索即时过滤标题；`Esc` 与点外部都能关；勾选即增删通道。
 
@@ -408,6 +408,8 @@ agent 侧可复核的旁证（**只证明注册事实，不替代本清单的观
 | 7 | `docs/prototype/mixer-topbar.html` 是**一次性设计原型**（A/B/C 对照，含空会话 hero 与让位示意），定形态后由 spike 真机版替代 | §10 |
 | 8 | 术语定名：`×` 的行为叫**「移出（put away）」**，代码 `parked`、文案仍「已移出」、顶栏钩子仍 `data-mixer-hidden`；`mute` 留给将来"通道还在、只是不打扰" | `CONTEXT.md` / §9.1 |
 | 9 | 新增术语**「新建落点」**并明确**废弃"当前工作区"这个说法**（调音台没有这个概念） | `CONTEXT.md` / §5.2 |
+| 10 | 抢回判据定为**"宿主 reveal 的会话是空白的"**（而不是"出现了新 id"），这样连"复用已有空白会话"那条宿主入口也覆盖 | §5.1 / ADR-0003 |
+| 11 | 新建失败在**顶栏**给一条带原因的提示（`data-mixer-create-error`），打开浮层时清掉 | §5.2 / §9.1 |
 
 ### 9.1 仍开放
 
@@ -481,9 +483,9 @@ DSH_REPO=/新的/checkout 路径 npm run check
 | `heroFor(summary)` | 空会话相位（§4.4，需求1）：返回 `{ phase, hero }`，判据照抄宿主 |
 | `landingWorkspace(workspaces, summaries, firstChannel)` | 「＋在此新建会话」的落点（§5.2，需求4）：第一个通道的 cwd 反查，否则镜像宿主 `recentWorkspace` |
 | `blankTargetFor(list, workspace, archivedIds)` | 复用同工作区空白会话的挑选（§4.1，需求2） |
-| `shouldReclaimPanel({ leftMixer, activePanelId, newSessionIds, mainViewIds })` | 窄条件抢回面板（§5.1 / ADR-0003，需求2） |
+| `shouldReclaimPanel({ leftMixer, activePanelId, revealed })` | 窄条件抢回面板（§5.1 / ADR-0003，需求2）：`revealed = { id, blank }` 来自宿主 `mainView` |
 
-另有两条不是纯函数、但同样被钉住的行为常量：`FOCUS_RETRY_FRAMES = 30`（光标交接等宿主 composer 出现的帧数上限，§5.1③）与 `RECLAIM_WINDOW_MS = 2000`（抢回判据的时效窗，§5.1）。
+另有两条行为常量，**只在文档与代码注释里约定、不进 `__test`**（它们不是判断，是时序参数，钉一个数字等于写同义反复）：`FOCUS_RETRY_FRAMES = 30`（光标交接等宿主 composer 出现的帧数上限，§5.1③）与 `RECLAIM_WINDOW_MS = 2000`（抢回判据的时效窗，§5.1）。
 
 后 4 条是 2026-10-15 第二轮新增（需求 1 / 2 / 4）。**用例数已落地**：v1 的 53 例 + 本轮 15 例 = **68 例**全绿（`seams` 新增 4 例、`render` 新增 1 例、`interaction` 新增 10 例）。`tests/harness.mjs` 的假宿主已补齐 `ctx.sessions.create` 的记录、`sessions.list` / `layout.panelInfo` 两个可订阅源（含 `setList` / `setPanelInfo` 驱动），并且 `useStore` 改成真的订阅 + 版本号重渲染——原来只读快照，导致"面板自己的写入"在测试里根本不会触发重渲染，`×` 关闭那条用例是靠别的原因才过的。
 

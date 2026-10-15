@@ -354,27 +354,29 @@ window.__ModuleLoader__.load({
      * cannot be intercepted: `startSession` → `openWorkspace` → `replaceMain(…,
      * 'reveal')` → `selectPanel(null)` (navigation.ts:433) unmounts the mixer. The
      * plugin re-asserts its panel instead — but only on the conjunction that reads as
-     * "the mixer just went away AND the host revealed a Session it did not have
-     * before".
+     * "the mixer just went away AND the host revealed a Session with no history".
      *
-     * Why the mainView half is not optional: a panel going blank with a fresh Session
-     * around is NOT enough. Clicking a sidebar row does the same `selectPanel(null)`
-     * through the same `replaceMain`, and any Session can appear from elsewhere (a
-     * background agent, another window). What only the host's own new-session path
-     * produces is a Session that was just catalogued AND is now the `mainView`
-     * reference — the reveal is what marks it. Reading the convention is allowed;
-     * writing it never is (docs/adr/0001, docs/adr/0003).
+     * Why "no history" and not "a new id": the host's `reuseOrCreateBlank`
+     * (navigation.ts:185-198) happily REUSES a blank Session instead of creating one,
+     * and a blank channel is exactly what the plugin's own ＋ leaves behind — so a
+     * new-id test would miss the most common repeat press and throw the user out
+     * anyway. Blankness is also what separates the create path from the other user of
+     * the very same `replaceMain(…, 'reveal')`: clicking a sidebar Session row reveals
+     * a Session that has history.
+     *
+     * Boundary this accepts: deliberately leaving the mixer by clicking the sidebar row
+     * of a BLANK Session is indistinguishable and takes you back (ADR-0003).
      * @param input.leftMixer - the mixer was the active panel and went blank just now.
      * @param input.activePanelId - where the host says the centre panel is now.
-     * @param input.newSessionIds - Session ids seen for the first time.
-     * @param input.mainViewIds - Session ids currently retained by `mainView`.
+     * @param input.revealed - `{ id, blank }` for the Session `mainView` now points at.
      * @returns whether to call `selectPanel('mixer')` again.
      */
     function shouldReclaimPanel(input) {
-      const fresh = Array.isArray(input.newSessionIds) ? input.newSessionIds : []
-      const revealed = Array.isArray(input.mainViewIds) ? input.mainViewIds : []
+      const revealed = input.revealed
       if (input.leftMixer !== true || input.activePanelId !== null) return false
-      return fresh.some(id => revealed.indexOf(id) !== -1)
+      if (revealed === undefined || revealed === null) return false
+      if (revealed.blank !== true) return false
+      return typeof revealed.id === 'string' && revealed.id !== ''
     }
 
     /**
@@ -1445,7 +1447,7 @@ window.__ModuleLoader__.load({
          answer "where does ＋新建会话 land" — the first visible channel's workspace, or
          the one picked in the panel for this open. */
       const landingId = landing === undefined
-        ? landingWorkspace(workspaces, summaries, visible[0])
+        ? landingWorkspace(workspaces, summaries, channels[0])
         : landing
       const landingItem = workspaces.find(workspace => workspace.workspaceId === landingId)
 
@@ -1550,8 +1552,9 @@ window.__ModuleLoader__.load({
           sessions: summaries,
           landingId,
           landingTitle: landingItem === undefined ? undefined : landingItem.title,
-          /* Each open starts from the derived landing, so a pick lasts one open. */
-          onPanelOpened: () => setLanding(undefined),
+          /* Each open starts from the derived landing, and drops a stale failure note:
+             the note is about one attempt, not about the bar's steady state. */
+          onPanelOpened: () => { setLanding(undefined); setCreateError(undefined) },
           onPickLanding: (workspaceId) => setLanding(workspaceId),
           onToggleChannel: toggleChannel,
           onNewSession: createChannel,
@@ -1721,78 +1724,47 @@ window.__ModuleLoader__.load({
 
         /* Host new-session entrances (the 56px rail's own button, `session.new`)
            cannot be intercepted: they call `selectPanel(null)` on the way out. Take the
-           panel back — but ONLY on that conjunction (the mixer just went blank AND a
-           brand-new Session appeared with it). A user leaving on purpose looks
-           identical on the panel side, so the fresh-Session set carries the weight
-           (spec §5.1, ADR-0003). The window only bounds how long the two halves may be
-           apart; it is not a licence to reclaim later. */
+           panel back — but only when the host's own reveal marker says it just revealed
+           a Session with NO HISTORY, which is what its new-session path produces whether
+           it created the Session or REUSED an existing blank one (a blank channel is
+           exactly what our own ＋ leaves behind, so a new-id test would miss the most
+           common repeat press). A sidebar row click reveals a Session with history and
+           stays out. The window only bounds how long the reveal may lag the exit; it is
+           not a licence to reclaim later (spec §5.1, ADR-0003). */
         const RECLAIM_WINDOW_MS = 2000
-        const knownIds = new Set(ctx.sessions.list.getSnapshot().ids ?? [])
-        let freshIds = []
-        let freshAt = 0
         let leftMixerAt = 0
         let previousPanelId = ctx.layout.panelInfo.getSnapshot().activePanelId
-        const noteFreshSessions = () => {
-          const ids = ctx.sessions.list.getSnapshot().ids ?? []
-          const inMixer = ctx.layout.panelInfo.getSnapshot().activePanelId === PANEL_ID
-          for (const id of ids) {
-            if (knownIds.has(id)) continue
-            knownIds.add(id)
-            /* Only ids that appear WHILE the mixer is the panel can be evidence for
-               leaving it. A cold boot's list burst (or anything created by a Session we
-               made ourselves) arrives while another view is up, and must never summon
-               the mixer later. */
-            if (!inMixer) continue
-            if (created.has(id)) continue
-            freshIds.push(id)
-          }
-          if (freshIds.length > 0) freshAt = Date.now()
-        }
-        /* The ids the host's own `mainView` convention currently points at. Read-only
-           (docs/adr/0001): this is how the reveal marks the Session it created. */
-        const mainViewIds = () => {
-          const snapshot = ctx.sessions.list.getSnapshot()
-          const rows = snapshot.byId ?? {}
+        /* What `mainView` points at right now, as `{ id, blank }`. Read-only: the
+           convention is the host's and writing it is forbidden (docs/adr/0001). Two ids
+           can be retained for a moment across a hand-off; the blank one is the reveal. */
+        const revealedMainView = () => {
+          const rows = ctx.sessions.list.getSnapshot().byId ?? {}
           const ids = []
           for (const [id, row] of Object.entries(rows)) {
             const retained = row === null || row === undefined ? undefined : row.retainedBy
             const count = retained === null || retained === undefined ? undefined : retained.mainView
             if (typeof count === 'number' && count > 0) ids.push(id)
           }
-          return ids
+          if (ids.length === 0) return undefined
+          const blankId = ids.find(id => rows[id].blank === true)
+          const chosen = blankId === undefined ? ids[0] : blankId
+          return { id: chosen, blank: rows[chosen].blank === true }
         }
         const maybeReclaim = () => {
-          /* Both halves are recency-bounded: a Session that appeared long ago is not
-             evidence for the exit we are looking at. */
-          if (freshAt !== 0 && Date.now() - freshAt > RECLAIM_WINDOW_MS) {
-            freshIds = []
-            freshAt = 0
-          }
           const activePanelId = ctx.layout.panelInfo.getSnapshot().activePanelId
           const leftMixer = leftMixerAt !== 0 && Date.now() - leftMixerAt <= RECLAIM_WINDOW_MS
           if (!leftMixer) {
             leftMixerAt = 0
             return
           }
-          const revealed = mainViewIds()
-          if (!shouldReclaimPanel({
-            leftMixer,
-            activePanelId,
-            newSessionIds: freshIds,
-            mainViewIds: revealed,
-          })) return
-          /* The Session to put first is the one the host REVEALED, not merely the last
-             id that happened to appear. */
-          const target = freshIds.filter(id => revealed.indexOf(id) !== -1)
-          pendingFirst = target[target.length - 1]
-          freshIds = []
-          freshAt = 0
+          const revealed = revealedMainView()
+          if (!shouldReclaimPanel({ leftMixer, activePanelId, revealed })) return
+          pendingFirst = revealed.id
           leftMixerAt = 0
           ctx.layout.selectPanel(PANEL_ID)
         }
         ctx.effect(() => {
           const stopList = ctx.sessions.list.subscribe(() => {
-            noteFreshSessions()
             maybeReclaim()
           })
           const stopPanel = ctx.layout.panelInfo.subscribe(() => {

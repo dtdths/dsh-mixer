@@ -271,25 +271,27 @@ test('blankTargetFor: reuses a listed, unarchived blank Session of that workspac
 /*
  * Requirement 2 (spec §5.1 / ADR-0003): reclaiming the centre panel must fire ONLY on
  * the host's new-session transition. A user leaving on purpose blanks the panel through
- * the very same `replaceMain(…, 'reveal')`, so the "the host revealed a Session it did
- * not have before" half carries all the weight.
+ * the very same `replaceMain(…, 'reveal')`, so the "the host revealed a Session with no
+ * history" half carries all the weight — and it must cover the REUSE branch, which is
+ * why blankness, not novelty, is the marker.
  */
-test('shouldReclaimPanel: only the host new-session transition, never a plain exit', () => {
-  const fire = { leftMixer: true, activePanelId: null, newSessionIds: ['n1'], mainViewIds: ['n1'] }
+test('shouldReclaimPanel: only a revealed blank Session, never a plain exit', () => {
+  const fire = { leftMixer: true, activePanelId: null, revealed: { id: 'n1', blank: true } }
   assert.equal(shouldReclaimPanel(fire), true)
-  /* Nothing new appeared: the user clicked a sidebar Session row. */
-  assert.equal(shouldReclaimPanel({ ...fire, newSessionIds: [] }), false)
-  /* A fresh Session that the host did NOT reveal is not evidence: it could be a
-     background agent's, or one this plugin created itself. */
-  assert.equal(shouldReclaimPanel({ ...fire, mainViewIds: [] }), false)
-  assert.equal(shouldReclaimPanel({ ...fire, mainViewIds: ['other'] }), false)
+  /* The host reused an existing blank Session: no new id at all, still our case. */
+  assert.equal(shouldReclaimPanel({ ...fire, revealed: { id: 'old', blank: true } }), true)
+  /* A sidebar row click reveals a Session that has history: stay out. */
+  assert.equal(shouldReclaimPanel({ ...fire, revealed: { id: 's1', blank: false } }), false)
+  /* Nothing revealed at all. */
+  assert.equal(shouldReclaimPanel({ ...fire, revealed: undefined }), false)
   /* The mixer was not the panel that just went away. */
   assert.equal(shouldReclaimPanel({ ...fire, leftMixer: false }), false)
   /* Another panel was selected in between (plugins/schedules): not our business. */
   assert.equal(shouldReclaimPanel({ ...fire, activePanelId: 'plugins' }), false)
   /* Missing/garbage input must not throw or reclaim. */
   assert.equal(shouldReclaimPanel({}), false)
-  assert.equal(shouldReclaimPanel({ leftMixer: true, activePanelId: null, newSessionIds: ['n1'] }), false)
-  assert.equal(shouldReclaimPanel({ ...fire, newSessionIds: 'n1' }), false)
-  assert.equal(shouldReclaimPanel({ ...fire, mainViewIds: 'n1' }), false)
+  assert.equal(shouldReclaimPanel({ leftMixer: true, activePanelId: null }), false)
+  assert.equal(shouldReclaimPanel({ ...fire, revealed: { blank: true } }), false)
+  assert.equal(shouldReclaimPanel({ ...fire, revealed: { id: '', blank: true } }), false)
+  assert.equal(shouldReclaimPanel({ ...fire, revealed: { id: 'n1' } }), false)
 })

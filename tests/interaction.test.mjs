@@ -157,17 +157,18 @@ test('interaction: 新建会话 creates through the session service and lands fi
   assert.equal(focused.closest('[data-mixer-pane]').getAttribute('data-mixer-pane'), 'created-1')
 })
 
-test('interaction: leaving right after ＋新建会话 must not be undone by the reclaim (§5.1)', async () => {
+test('interaction: leaving by opening a Session WITH history is never undone by the reclaim (§5.1)', async () => {
   const ui = await mountTwo()
   const { act, window } = ui
   const click = element => act(() => { element.dispatchEvent(new window.MouseEvent('click', { bubbles: true })) })
 
+  /* The plugin's own ＋ leaves a blank channel behind; that must not make the NEXT
+     deliberate exit look like a host navigation. */
   click(ui.$('[data-mixer-sessions]'))
   await act(async () => {
     ui.$('[data-mixer-new]').dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
     await new Promise(resolve => setTimeout(resolve, 0))
   })
-  /* The host list catches up with the Session we created. */
   const grown = {
     ids: ['s1', 's2', 's3', 'created-1'],
     byId: { ...list.byId, 'created-1': { id: 'created-1', displayTitle: '（空白）', blank: true, cwd: '/repo' } },
@@ -175,17 +176,15 @@ test('interaction: leaving right after ＋新建会话 must not be undone by the
     projectionsBySession: {},
   }
   act(() => { ui.host.setList(grown) })
-  /* It also became the host's `mainView` — but the panel is NOT the mixer in this
-     scenario, so it is not evidence of a host navigation either way. */
-  const revealed = {
-    ...grown,
-    byId: { ...grown.byId, 'created-1': { ...grown.byId['created-1'], retainedBy: { mainView: 1 } } },
-  }
-  act(() => { ui.host.setList(revealed) })
 
-  /* The user now leaves on purpose (a sidebar Session row). The Session we just created
-     is NOT evidence that the host navigated, so the mixer must stay gone. */
+  /* The user leaves by opening a Session that HAS history: the host's reveal marker
+     points at a non-blank row, so the mixer stays gone. */
+  const withHistory = {
+    ...grown,
+    byId: { ...grown.byId, s2: { ...grown.byId.s2, retainedBy: { mainView: 1 } } },
+  }
   act(() => { ui.host.setPanelInfo({ activePanelId: 'mixer' }) })
+  act(() => { ui.host.setList(withHistory) })
   act(() => { ui.host.setPanelInfo({ activePanelId: null }) })
   assert.deepEqual(ui.host.selectPanelCalls, [])
 })
@@ -257,41 +256,34 @@ test('interaction: a blank Session of the landing workspace is reused, not recre
   assert.deepEqual(ui.instance.getSnapshot().channels, ['b1', 's1', 's2'])
 })
 
-test('interaction: the host new-session path reclaims the panel, a plain exit does not (§5.1)', async () => {
+test('interaction: the host REUSING a blank Session still keeps the mixer (§5.1)', async () => {
   const ui = await mountTwo()
   const { act } = ui
 
-  /* A sidebar Session row lands on the same selectPanel(null) without any new
-     Session: the mixer must stay gone. */
+  /* A plain exit: no reveal marker at all, the mixer must stay gone. */
   act(() => { ui.host.setPanelInfo({ activePanelId: 'mixer' }) })
   act(() => { ui.host.setPanelInfo({ activePanelId: null }) })
   assert.deepEqual(ui.host.selectPanelCalls, [])
 
-  /* The host's own entrance: a brand-new Session appears and is REVEALED as the
-     mainView reference, and the panel blanks with it. The panel is the mixer while the
-     list update lands, which is the ordering that must not be lost. */
-  const grown = {
-    ids: ['s1', 's2', 's3', 'n9'],
-    byId: {
-      ...list.byId,
-      n9: {
-        id: 'n9', displayTitle: '新会话', blank: true, running: false,
-        parentId: undefined, cwd: '/repo', retainedBy: { mainView: 1 },
-      },
-    },
-    phase: 'ready',
-    projectionsBySession: {},
+  /* The host's own rail button / shortcut REUSES a blank Session (navigation.ts:185-198
+     `reuseOrCreateBlank`): no new id appears anywhere, but the host marks the revealed
+     Session as its `mainView` reference. A new-id test would miss exactly this — the
+     most common repeat press, since our own ＋ leaves a blank Session behind. */
+  const blank = { id: 's3', displayTitle: '（空白）', blank: true, running: false, parentId: undefined, cwd: '/repo' }
+  const revealed = {
+    ...list,
+    byId: { ...list.byId, s3: { ...blank, retainedBy: { mainView: 1 } } },
   }
   act(() => { ui.host.setPanelInfo({ activePanelId: 'mixer' }) })
-  act(() => { ui.host.setList(grown) })
+  act(() => { ui.host.setList(revealed) })
   /* The host unmounts the mixer on its way out… */
   act(() => { ui.root.render(null) })
   act(() => { ui.host.setPanelInfo({ activePanelId: null }) })
   assert.deepEqual(ui.host.selectPanelCalls, ['mixer'])
-  /* …and the panel comes back with the new Session first, retained. */
-  ui.draw({ list: grown })
-  assert.deepEqual(ui.instance.getSnapshot().channels, ['n9', 's1', 's2'])
-  assert.ok(ui.host.retained.includes('n9'))
+  /* …and the panel comes back with the reused Session first, retained. */
+  ui.draw({ list: revealed })
+  assert.equal(ui.instance.getSnapshot().channels[0], 's3')
+  assert.ok(ui.host.retained.includes('s3'))
 })
 
 test('interaction: Esc and a second click both close the 会话 panel (§5.2)', async () => {
