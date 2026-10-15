@@ -148,14 +148,18 @@ window.__ModuleLoader__.load({
     const MONO = 'ui-monospace, SFMono-Regular, Menlo, monospace'
     const SANS = 'system-ui, -apple-system, "Segoe UI", sans-serif'
 
-    const KIND_LABEL = { approval: '等待审批', 'plan-review': '等待计划确认', question: '等待回答' }
+    /*
+     * Wording for the states a channel shares with the sidebar's session row. v1
+     * hardcodes the Simplified Chinese strings (locale service is deferred: spec §1),
+     * so they are copied verbatim from the sidebar's own dictionary
+     * (`ui-workspace/src/client/locales.ts`, keys `status.*`) rather than invented.
+     * `tests/labels.test.mjs` parses that file and fails if any of these drifts.
+     */
+    const KIND_LABEL = { approval: '等待审批', 'plan-review': '计划待审', question: '等待回答' }
     /* Only these three kinds count as "visible waiting", the same whitelist the sidebar
        row applies (tree.ts:379-388); other domains register their own kinds and must
        not light our channels. */
     const VISIBLE_PENDING_KINDS = ['approval', 'plan-review', 'question']
-    /* Row-state wording copied from the sidebar's own labels
-       (ui-workspace/src/client/locales.ts:102-112), so a channel and its sidebar row
-       never describe the same Session differently. */
     const STATE_LABEL = { running: '进行中', completed: '已完成', idle: '空闲' }
     const subagentsLabel = n => `${n} 个子智能体运行中`
     /* Full parity with the sidebar row would mean a grey idle dot in EVERY header;
@@ -1164,6 +1168,9 @@ window.__ModuleLoader__.load({
       crumbsFor,
       createBoardStore,
       createSidebar,
+      /* Label tables too: `tests/labels.test.mjs` checks them against the sidebar's
+         own dictionary, and the pane tooltip reads KIND_LABEL directly. */
+      labels: { kinds: KIND_LABEL, states: STATE_LABEL, subagents: subagentsLabel },
     }
 
     return {
