@@ -74,9 +74,10 @@ window.__ModuleLoader__.load({
      * `calc(var(--dsh-composer-side-clearance) + 16px)` per side. In our embedded
      * panes the clearance is 8px (`ConversationRoot.module.css`, `.embeddedBody`),
      * so the container measures pane − 2*(8+16) = pane − 48. The host's effective
-     * pane requirement is therefore ~948px; ours is 640px, i.e. 592px of container.
+     * pane requirement is therefore ~948px; ours is 560px, i.e. 512px of container
+     * (user 2026-10-15: "这个值再小一点"; was 640/592).
      */
-    const RAIL_MIN_PANE_W = 640
+    const RAIL_MIN_PANE_W = 560
     const RAIL_MIN_CONTAINER_W = RAIL_MIN_PANE_W - 48
     /* Persisted channel selection (#9). Namespaced like ui-sidebar-right's
        `dsh.sidebar-right.v1`; the real build should go through the store
@@ -108,6 +109,39 @@ window.__ModuleLoader__.load({
     const SANS = 'system-ui, -apple-system, "Segoe UI", sans-serif'
 
     const KIND_LABEL = { approval: '等待审批', 'plan-review': '等待计划确认', question: '等待回答' }
+    /* Only these three kinds count as "visible waiting", the same whitelist the sidebar
+       row applies (tree.ts:379-388); other domains register their own kinds and must
+       not light our channels. */
+    const VISIBLE_PENDING_KINDS = ['approval', 'plan-review', 'question']
+    /* Row-state wording copied from the sidebar's own labels
+       (ui-workspace/src/client/locales.ts:102-112), so a channel and its sidebar row
+       never describe the same Session differently. */
+    const STATE_LABEL = { running: '进行中', completed: '已完成', idle: '空闲' }
+    const subagentsLabel = n => `${n} 个子智能体运行中`
+    /* Full parity with the sidebar row would mean a grey idle dot in EVERY header;
+       the user looked at that and said drop it (2026-10-15). Idle is therefore the one
+       documented deviation: the other four states stay identical to the sidebar, and
+       an idle channel simply shows nothing. The state is still reported in the diag
+       readout as `状态=idle`, so a pasted reading stays unambiguous. */
+    const SHOW_IDLE_DOT = false
+    /* Mirror of the host's runningChildCount (tree.ts:390-395): a subagent row is
+       running when the unified status says so, else the list row's own flag. */
+    function countRunningSubagents(list, id, status, summaries) {
+      const projections = list === undefined || list === null ? undefined : list.projectionsBySession
+      const snapshot = projections === undefined ? undefined : projections[id]
+      const values = snapshot === undefined ? undefined : snapshot.values
+      const catalog = values === undefined ? undefined : values.subagentCatalog
+      if (!Array.isArray(catalog)) return 0
+      let count = 0
+      for (const child of catalog) {
+        const entry = status === undefined ? undefined : status.get(child.id)
+        const childRunning = entry !== undefined && entry.running !== undefined
+          ? entry.running === true
+          : (summaries[child.id] === undefined ? false : summaries[child.id].running === true)
+        if (childRunning) count += 1
+      }
+      return count
+    }
 
     const MOCK_TASKS = [
       {
@@ -143,27 +177,46 @@ window.__ModuleLoader__.load({
       },
     ]
 
-    /** Read the persisted channel selection; any failure means "nothing stored". */
-    function loadStoredChannels() {
+    /**
+     * Read the persisted board: channel ids AND per-channel width weights, one key
+     * (user 2026-10-15: widths must be remembered too). The first prototype wrote a
+     * bare id array, so accept it and let those channels start from the default
+     * weight. Any failure means "nothing stored", and a single bad weight only costs
+     * that channel its value: never throw, never wipe the board.
+     */
+    function loadStoredBoard() {
       try {
         const raw = window.localStorage.getItem(PERSIST_KEY)
-        if (raw === null || raw === undefined) return null
+        if (raw === null || raw === undefined) return { channels: null, weights: {} }
         const parsed = JSON.parse(raw)
-        if (!Array.isArray(parsed)) return null
-        const ids = parsed.filter(id => typeof id === 'string' && id !== '')
-        return ids.length === 0 ? null : ids
+        const rawIds = Array.isArray(parsed)
+          ? parsed
+          : (parsed !== null && typeof parsed === 'object' ? parsed.channels : null)
+        if (!Array.isArray(rawIds)) return { channels: null, weights: {} }
+        const ids = rawIds.filter(id => typeof id === 'string' && id !== '')
+        const rawWeights = Array.isArray(parsed) || parsed === null || typeof parsed !== 'object'
+          ? undefined
+          : parsed.weights
+        const weights = {}
+        if (rawWeights !== undefined && rawWeights !== null && typeof rawWeights === 'object') {
+          for (const id of ids) {
+            const value = rawWeights[id]
+            if (typeof value === 'number' && Number.isFinite(value) && value > 0) weights[id] = value
+          }
+        }
+        return { channels: ids.length === 0 ? null : ids, weights }
       } catch (error) {
-        console.error('[mixer-proto] stored channel selection unusable, ignoring it', error)
-        return null
+        console.error('[mixer-proto] stored board unusable, ignoring it', error)
+        return { channels: null, weights: {} }
       }
     }
 
     /** Best-effort write; storage being unavailable must never break the view. */
-    function saveStoredChannels(ids) {
+    function saveStoredBoard(channels, weights) {
       try {
-        window.localStorage.setItem(PERSIST_KEY, JSON.stringify(ids))
+        window.localStorage.setItem(PERSIST_KEY, JSON.stringify({ channels, weights }))
       } catch (error) {
-        console.error('[mixer-proto] could not persist the channel selection', error)
+        console.error('[mixer-proto] could not persist the mixer board', error)
       }
     }
 
@@ -267,7 +320,7 @@ window.__ModuleLoader__.load({
       crumbSep: { color: T.fg2, opacity: 0.6, fontSize: 12.5 },
       /* Running indicator: the host's own StateDot, same as the sidebar rows.
          These two styles only cover the wrapper and the no-primitives fallback. */
-      runningWrap: { flex: '0 0 auto', display: 'inline-flex', alignItems: 'center' },
+      runningWrap: { flex: '0 0 auto', display: 'inline-flex', alignItems: 'center', gap: '4px' },
       runningFallback: {
         width: 8, height: 8, borderRadius: PILL,
         background: 'var(--dsw-alias-label-tertiary)',
@@ -487,7 +540,7 @@ window.__ModuleLoader__.load({
      *   'passthrough' - our override renders `conversation.session`, as the default does
      */
     function RealConversation(props) {
-      const { renderFactorySlot, mode, blank, running, viewsComponent } = props
+      const { renderFactorySlot, mode, blank, running, viewsComponent, state, simulatedRunning } = props
       const [probe, setProbe] = useState(null)
       const hostRef = useRef(null)
       const input = { variant: 'embedded', phase: 'active', hero: false }
@@ -557,7 +610,7 @@ window.__ModuleLoader__.load({
           + ` · 轮次导航 rail=${probe.rail} 标记=${probe.marks} 轮次=${probe.turns} 宽=${probe.w}px（<${RAIL_MIN_PANE_W} 才隐藏） band=${probe.band}`
       return h('div', { style: { flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' } },
         h('div', { style: CSS.diagLine, 'data-mixer-real-mode': mode },
-          `${mode === 'pinned' ? '真实·标签' : '真实·默认'} · blank=${String(blank)} running=${String(running)} · ${probeText}`),
+          `${mode === 'pinned' ? '真实·标签' : '真实·默认'} · blank=${String(blank)} 状态=${state === undefined ? '?' : state}${simulatedRunning === true ? '（模拟）' : ''} · 摘要running=${String(running)} · ${probeText}`),
         node === null || node === undefined
           ? h('div', { style: CSS.diag }, '真实内容未产出：工厂返回了空。请把这行抄给 agent。')
           : h('div', { ref: hostRef, style: { flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' } }, node),
@@ -726,7 +779,8 @@ window.__ModuleLoader__.load({
     function Pane(props) {
       const {
         variant, sessionId, summary, summaries, waiting, waitingKind, simulatedWaiting,
-        isFocus, index, contentMode, views, running, onClose, renderFactorySlot,
+        isFocus, index, contentMode, views, running, subagents, completed, simulatedRunning,
+        onClose, renderFactorySlot,
       } = props
       const isWaiting = waiting !== undefined
       const title = summary === undefined ? sessionId : summary.displayTitle
@@ -764,6 +818,31 @@ window.__ModuleLoader__.load({
         'data-mixer-close': sessionId,
         onClick: () => onClose(sessionId),
       }, '×')
+      /* State parity with the sidebar's session row (spec §4.3b). Order and pairing
+         follow the host verbatim (Rows.tsx:347-397): pending wins and is already drawn
+         as the stripe, then running, then the subagent dot (CO-displayed next to
+         pending or running rather than replacing them), then completed, then
+         idle. Same glyphs (StateDot) and same wording as the sidebar. */
+      const subagentCount = typeof subagents === 'number' && subagents > 0 ? subagents : 0
+      const dots = []
+      if (isWaiting) {
+        if (subagentCount > 0) dots.push({ key: 'subagents', state: 'ongoing', label: subagentsLabel(subagentCount), size: 10 })
+      } else if (running === true) {
+        /* A staged (demo) spinner says so, so a pasted readout can never be mistaken
+           for a genuinely running Session. */
+        dots.push({ key: 'running', state: 'ongoing', label: STATE_LABEL.running + (simulatedRunning === true ? ' · 模拟' : ''), size: 12 })
+        if (subagentCount > 0) dots.push({ key: 'subagents', state: 'ongoing', label: subagentsLabel(subagentCount), size: 10 })
+      } else if (subagentCount > 0) {
+        dots.push({ key: 'subagents', state: 'ongoing', label: subagentsLabel(subagentCount), size: 12 })
+      } else if (completed === true) {
+        dots.push({ key: 'completed', state: 'done', label: STATE_LABEL.completed, size: 12 })
+      } else if (SHOW_IDLE_DOT) {
+        dots.push({ key: 'idle', state: 'idle', label: STATE_LABEL.idle, size: 12 })
+      }
+      const stateName = dots.length > 0
+        ? dots.map(dot => dot.key).join('+')
+        : (isWaiting ? 'waiting' : 'idle')
+      const stateLabel = dots.map(dot => dot.label).join(' · ')
 
       return h('div', {
         style: paneStyle,
@@ -779,7 +858,7 @@ window.__ModuleLoader__.load({
              so one code path serves both this and a drop from the sidebar. */
           draggable: true,
           title: isWaiting
-            ? `${KIND_LABEL[waitingKind] || '等待你处理'}（拖动可调整通道顺序）`
+            ? `${KIND_LABEL[waitingKind] || '等待你处理'}${simulatedWaiting === true ? ' · 模拟' : ''}（拖动可调整通道顺序）`
             : '拖动可调整通道顺序',
           onDragStart: (event) => {
             /* Never start a channel drag from the head's own controls. */
@@ -792,18 +871,20 @@ window.__ModuleLoader__.load({
             event.dataTransfer.setData('text/plain', sessionId)
           },
         },
-          /* Running first: the user asked for the spinner ahead of the breadcrumb.
-             Same glyph as the sidebar's session rows (`StateDot state="ongoing"`). */
-          running === true
+          /* Status dots ahead of the breadcrumb, mirroring the sidebar row exactly
+             (see the `dots` comment above). The wait stripe stays the waiting mark,
+             so a waiting channel shows no primary dot, only a subagent one if any. */
+          dots.length > 0
             ? h('span', {
                 style: CSS.runningWrap,
-                'data-mixer-loading': 'yes',
+                'data-mixer-loading': running === true ? 'yes' : 'no',
+                'data-mixer-state': stateName,
                 role: 'status',
-                'aria-label': 'AI 正在执行',
-                title: 'AI 正在执行',
-              }, StateDot === null
-                ? h('span', { style: CSS.runningFallback })
-                : h(StateDot, { state: 'ongoing', size: 12 }))
+                'aria-label': stateLabel,
+                title: stateLabel,
+              }, dots.map(dot => StateDot === null
+                ? h('span', { key: dot.key, style: CSS.runningFallback })
+                : h(StateDot, { key: dot.key, state: dot.state, size: dot.size })))
             : null,
           h('nav', { style: CSS.crumbs, 'aria-label': '会话层级' },
             crumbs.map((crumb, crumbIndex) => h(React.Fragment, { key: crumb.id },
@@ -858,6 +939,8 @@ window.__ModuleLoader__.load({
                 viewsComponent: pinned ? viewsComponent : undefined,
                 blank: summary === undefined ? undefined : summary.blank,
                 running: summary === undefined ? undefined : summary.running,
+                state: stateName,
+                simulatedRunning: simulatedRunning === true,
               }),
         ),
       )
@@ -937,7 +1020,8 @@ window.__ModuleLoader__.load({
     function Grid(props) {
       const {
         variant, ids, summaries, attention, focusId, SessionProvider, refFor, contentMode,
-        views, running, weights, onResize, onDropChannel, onClose, renderFactorySlot,
+        views, running, subagents, completed, stagedRunning, weights, onResize, onDropChannel,
+        onClose, renderFactorySlot,
       } = props
       const trackRef = useRef(null)
       /* Insertion gap while a channel (or a sidebar session row) hovers the track. */
@@ -1018,10 +1102,13 @@ window.__ModuleLoader__.load({
                   waiting: attention[id],
                   waitingKind: attention[id] === undefined ? undefined : attention[id].kind,
                   simulatedWaiting: attention[id] === undefined ? undefined : attention[id].simulated,
+                  simulatedRunning: stagedRunning === undefined ? false : stagedRunning[id] === true,
                   isFocus: id === focusId,
                   contentMode,
                   views,
                   running: running === undefined ? undefined : running[id] === true,
+                  subagents: subagents === undefined ? 0 : subagents[id],
+                  completed: completed === undefined ? undefined : completed[id] === true,
                   onClose,
                   renderFactorySlot,
                 }))),
@@ -1079,7 +1166,7 @@ window.__ModuleLoader__.load({
       const {
         useSessions, useSessionStatus, useWorkspaces, SessionProvider, renderFactorySlot, refFor,
         backToConversation, startSession, openWorkspace, collapseSidebar, restoreSidebar, listViews,
-        storedChannels,
+        storedBoard,
       } = props
       const [variant, setVariant] = useState('V2')
       const [forced, setForced] = useState(true)
@@ -1088,11 +1175,12 @@ window.__ModuleLoader__.load({
       const [focusId, setFocusId] = useState(null)
       /* null = never picked anything, so fall back to the first few Sessions.
          A stored selection (#9, user decision) wins over that default. */
-      const [channels, setChannels] = useState(storedChannels === undefined ? null : storedChannels)
+      const [channels, setChannels] = useState(storedBoard === undefined ? null : storedBoard.channels)
       const [hidden, setHidden] = useState([])
       /* Per-channel relative width, changed by dragging a divider. Session-keyed so
-         it survives channels coming and going; unknown ids fall back to weight 1. */
-      const [weights, setWeights] = useState({})
+         it survives channels coming and going; unknown ids fall back to weight 1.
+         Restored from the same persisted board the channel list comes from. */
+      const [weights, setWeights] = useState(storedBoard === undefined ? {} : storedBoard.weights)
 
       const list = useSessions(state => state)
       const status = useSessionStatus(snapshot => snapshot)
@@ -1111,14 +1199,19 @@ window.__ModuleLoader__.load({
         return () => restoreSidebar()
       }, [collapseSidebar, restoreSidebar])
 
-      /* Persist the selection once the user owns one (#9, user decision: remember
-         it). The untouched default is never written, so first run stays clean. */
       const listIds = list && list.ids ? list.ids : []
       const listIdsKey = listIds.join(',')
+      /* Persist the board once the user owns one (#9, user decision: remember it,
+         and since 2026-10-15 also remember the widths). The untouched default is
+         never written, so first run stays clean. Dragging a divider updates weights
+         on every pointermove, so the write is debounced ("拖完即写") without a
+         localStorage write per mouse event. */
+      const weightsKey = JSON.stringify(weights)
       useEffect(() => {
         if (channels === null) return
-        saveStoredChannels(channels)
-      }, [channels])
+        const timer = setTimeout(() => saveStoredBoard(channels, weights), 250)
+        return () => clearTimeout(timer)
+      }, [channels, weightsKey])
 
       /* Auto-remove a channel whose Session was closed or archived on the left
          (#5, user decision). Two guards keep this from wiping the board: the Host
@@ -1132,7 +1225,18 @@ window.__ModuleLoader__.load({
         if (channels === null) return
         if (listIds.length === 0) return
         const alive = channels.filter(id => listIds.includes(id) && !archivedIds.includes(id))
-        if (alive.length !== channels.length) setChannels(alive)
+        if (alive.length === channels.length) return
+        const gone = channels.filter(id => !alive.includes(id))
+        setChannels(alive)
+        /* Drop the weights of Sessions that are really gone, so the persisted map
+           cannot grow forever. A channel removed with × is NOT in this path: it
+           keeps its weight so putting it back restores the same proportions. */
+        setWeights(current => {
+          if (gone.length === 0 || gone.every(id => current[id] === undefined)) return current
+          const next = { ...current }
+          for (const id of gone) delete next[id]
+          return next
+        })
       }, [channels, listIdsKey, archivedKey])
 
       /* Channels are ours (ticket #2 option c): default to the first three, then
@@ -1143,6 +1247,8 @@ window.__ModuleLoader__.load({
       const attention = {}
       const running = {}
       const observedRunning = {}
+      const subagents = {}
+      const completed = {}
       ;[...visible, ...hidden].forEach(id => {
         /* Retain every channel we are tracking, including ones closed away from the
            layout: the waiting signal only exists for retained Sessions, so dropping
@@ -1150,21 +1256,33 @@ window.__ModuleLoader__.load({
         refFor(id)
         const entry = status === undefined ? undefined : status.get(id)
         const real = entry === undefined ? undefined : entry.pendingInteraction
-        if (real !== undefined) attention[id] = { kind: real.kind, simulated: false }
-        else if (forced && id === visible[1]) attention[id] = { kind: 'approval', simulated: true }
+        /* Whitelist, not "any kind": other domains register their own pending kinds
+           and the sidebar row does not surface them either (spec §4.3b). */
+        if (real !== undefined && VISIBLE_PENDING_KINDS.indexOf(real.kind) !== -1) {
+          attention[id] = { kind: real.kind, simulated: false }
+        } else if (forced && id === visible[1]) attention[id] = { kind: 'approval', simulated: true }
         /* Executing/thinking: SessionStatus.running is the live observation, the
            Session summary is the Host fallback while the status source is silent. */
         const summary = summaries[id]
         observedRunning[id] = entry !== undefined && entry.running !== undefined
           ? entry.running === true
           : (summary === undefined ? false : summary.running === true)
+        /* The two extra sidebar states: a second dot for running subagents, and the
+           green "finished while you were not looking" dot (spec §4.3b). */
+        subagents[id] = countRunningSubagents(list, id, status, summaries)
+        completed[id] = entry !== undefined && entry.completionUnread === true
       })
       /* Stage the indicator only when nothing is genuinely running, so the demo
-         never contradicts the real state. */
+         never contradicts the real state. `staged` remembers WHICH channels are
+         demo-only, so every readout can say so instead of looking like a real
+         running Session (the previous readout lied: 状态=running with running=false). */
       const anyObservedRunning = visible.some(id => observedRunning[id] === true)
       const stageRunning = forcedRunning && !anyObservedRunning && visible.length > 0
+      const staged = {}
       ;[...visible, ...hidden].forEach(id => {
-        running[id] = observedRunning[id] === true || (stageRunning && id === visible[0])
+        const demo = stageRunning && id === visible[0]
+        staged[id] = demo
+        running[id] = observedRunning[id] === true || demo
       })
       const visibleWaiting = visible.filter(id => attention[id] !== undefined)
       const hiddenWaiting = hidden.filter(id => attention[id] !== undefined).length
@@ -1268,7 +1386,8 @@ window.__ModuleLoader__.load({
                 '用顶栏的工作区下拉勾选要关注的会话，只有勾中的会话会在这里列出。移除的会话不会停止，仍在等你的话顶栏会提示。'))
           : h(Grid, {
               variant, ids: visible, summaries, attention, focusId: effectiveFocus,
-              SessionProvider, refFor, contentMode, views, running, weights,
+              SessionProvider, refFor, contentMode, views, running, subagents, completed,
+              stagedRunning: staged, weights,
               onResize: resizeChannels,
               onDropChannel: dropChannel,
               onClose: closeChannel, renderFactorySlot,
@@ -1319,9 +1438,9 @@ window.__ModuleLoader__.load({
         }
         ctx.effect(() => () => releaseAll())
 
-        /* Read the stored channel selection once, at plugin load, rather than on
-           every render of the inject factory. */
-        const storedChannels = loadStoredChannels()
+        /* Read the stored board (channels + width weights) once, at plugin load,
+           rather than on every render of the inject factory. */
+        const storedBoard = loadStoredBoard()
 
         /* Prototype shortcut: read the frame's own collapsed marker instead of a
            layout API that does not expose it. A real build needs that API. */
@@ -1354,7 +1473,7 @@ window.__ModuleLoader__.load({
             openWorkspace: (workspaceId) => ctx.uiWorkspace.openWorkspace(workspaceId),
             collapseSidebar,
             restoreSidebar,
-            storedChannels,
+            storedBoard,
             /* Read the registered conversation views for the tab row. Guarded
                because `entries` is not part of the catalogued service face, even
                though shipped plugins (ui-settings-general) call it. */
