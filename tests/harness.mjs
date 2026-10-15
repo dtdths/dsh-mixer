@@ -120,6 +120,12 @@ export function setupDom() {
   window.Element.prototype.setPointerCapture = () => {}
   window.Element.prototype.releasePointerCapture = () => {}
   window.Element.prototype.hasPointerCapture = () => false
+  /* …and no scrollIntoView: the 会话 panel's left column scrolls the right one to the
+     picked workspace. Record the calls so a test can prove the jump happened. */
+  window.__scrolls = []
+  window.Element.prototype.scrollIntoView = function scrollIntoView() {
+    window.__scrolls.push(this.getAttribute('data-mixer-group'))
+  }
   return { dom, window }
 }
 

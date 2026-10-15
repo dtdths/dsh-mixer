@@ -76,6 +76,13 @@ test('render: an empty channel is handed the host hero phase, a live one stays d
   assert.match(html, /data-mixer-cell="s1"[\s\S]*?data-phase="active"/)
   assert.equal((html.match(/data-phase="hero"/g) ?? []).length, 1)
   assert.equal((html.match(/data-phase="active"/g) ?? []).length, 1)
+
+  /* Round 3: the empty channel's stack is lifted above the host's own optical centre
+     with a margin (never a transform — that would become the containing block for the
+     host's fixed pickers), scoped to our panes and to the hero phase only. The exact
+     value is a tunable constant, so only the shape is pinned here. */
+  assert.match(html, /\[data-mixer-pane\] \[data-content-phase=&quot;hero&quot;\] \[data-composer-seat\]\{margin-bottom:\d+px\}/)
+  assert.doesNotMatch(html, /translateY\(/)
 })
 
 test('render: a silent status source falls back to the list row, the way the sidebar does', async () => {

@@ -156,6 +156,7 @@ renderFactorySlot('conversation.content', { variant: 'embedded', phase, hero }, 
 - 判定缝 `heroFor(summary)` 返回 `{ phase, hero }`，判据**照抄宿主**，不另造语义。
 - 边界（诚实记录）：宿主还看会话快照的 `openState` / `awaitingFirstTurn`；插件只拿得到列表摘要的 `blank`，故 `hero` 用 `blank === true` 近似。差异只可能在"正在重放、hero/docked 未定"的那一瞬：**摘要已经是 blank 时**插件会先画 hero，而宿主此刻在隐藏 composer（对 blank 会话两者最终一致）；**摘要还没有这一行时**插件按 `active` 处理（`heroFor(undefined)`），宁可先给停靠条也不闪一下 hero。
 - 380px 窄格里 hero 的品牌标 + 标题是否太吵，看过真机再决定要不要降级成"只居中 composer"。
+- **光学位置再抬一点**（2026-10-15 第三轮，用户反馈「虽居中但整体观感偏下」）：空会话的 hero 栈在宿主几何中心之上再抬 `HERO_LIFT_PX = 48` 的一半，即 24px。实现是一条**注入的作用域规则**给宿主稳定的 `[data-composer-seat]` 加 `margin-bottom: 48px` —— 宿主用 flex 居中，底边距把这一项往上推半个值，且**不动布局数学**；**绝不能用 `transform`**：那会让这个盒子成为宿主那些 `position:fixed` 拾取器的包含块（`ConversationRoot.module.css` 明确写了这条）。规则只在 `[data-mixer-pane]` + `[data-content-phase="hero"]` 下生效；值是一个常量，观感不合适直接改它。
 
 - **共享工厂**：`conversation.content` 是宿主为多宿主复用准备的工厂，可直接在每格实例化。
 - `options.slots.views` 是**局部组件缝**：它的 `renderSlot` 绑定的是**工厂的子槽**，所以只能渲染 `conversation.session`（官方默认实现 `ConversationSessionView` 就是这么做）。**渲染 `conversation.view` 会抛错**（未声明键）→ 整棵工厂子树被卸载，表现为整格空白。
@@ -196,6 +197,9 @@ renderFactorySlot('conversation.content', input, { slots: { views: Views } })
   - 搜索：**本地按标题过滤**（即时、零依赖）。走宿主 `sessions.search` 的全文搜索是二期（§9.1）。
   - 关闭：`Esc`、点浮层外、或再点触发器；触发器要有 `aria-expanded`，面板要有 `role`。
   - devtools 可读的钩子：顶栏 `data-mixer-topbar`、触发器 `data-mixer-sessions`、浮层 `data-mixer-session-panel`（左列 `data-mixer-landing-column`、每个工作区行 `data-mixer-landing="<id>"`；右列 `data-mixer-session-column`、搜索框 `data-mixer-search`、每个会话行 `data-mixer-session="<id>"`、新建按钮 `data-mixer-new`）。
+
+  - **字号与按钮感（2026-10-15 第三轮，浏览器实测）**：顶栏整条 13px、`调音台` 标签 13.5/600、chip 11.5px；**`会话` 触发器静止时就带底色与描边**（此前透明，用户原话「无按钮样式」），打开时底色加深。浮层里：工作区行 / 会话行 / 搜索框 13px，分组标题 12px，左列宽 196、右列宽 344。—— 这与 §5.3 头部「不要再做回 11px 那一档」是同一条纪律：**可读性优先于紧凑**。
+  - **左列同时是跳转表（2026-10-15 第三轮）**：点左列某个工作区时，不仅把它设为新建落点，还要让**右列滚到该工作区的分组**（分组带 `data-mixer-group="<id>"`，用 `scrollIntoView({ block: 'start' })`，宿主/环境缺这个 API 时静默跳过）。
 - **不加独立的 `＋` 按钮**（用户 2026-10-15 决定）：新建仍从 `会话` 浮层底部进入，避免顶栏多一个语义相近的控件。
 - 触发器的文案是 `会话`，有通道时追加数量（`会话 · 3`）；浮层右列按工作区分组、搜索框是 `type="search"`、底部夹一条 `勾选即加入通道`（搜索时变成 `过滤：<词>`）的提示行——这三处是实现时顺手补的可读性细节，不影响上面任何决定。
 - **新建失败要在顶栏可见**（`data-mixer-create-error`）：`ctx.sessions.create` 失败时给一条带原因的提示，绝不静默什么都不发生——宿主的 `startSession` 那条路会经通知服务报错，我们这条路至少不能在界面上无声无息（更完整的通知面见 §9.1）。
@@ -296,7 +300,7 @@ e.dataTransfer.setData('text/plain', node.id)   // node.id 就是 SessionId
 
 ## 6. 验证清单（装完怎么确认生效）
 
-0. **先跑自动化**：`npm run check`（语法 + **68 个用例**：纯函数缝 + 真 store 引擎 + 真 React（静态渲染与 jsdom 交互）+ 侧栏折叠 seam + 措辞对齐 + 宿主契约漂移哨兵 + 冷启动守卫）。这一条绿了再动浏览器 —— 它覆盖的是"冷启动会炸整页"和"注册事实静默丢失"这两类只有跑起来才看得见的问题。
+0. **先跑自动化**：`npm run check`（语法 + **69 个用例**：纯函数缝 + 真 store 引擎 + 真 React（静态渲染与 jsdom 交互）+ 侧栏折叠 seam + 措辞对齐 + 宿主契约漂移哨兵 + 冷启动守卫）。这一条绿了再动浏览器 —— 它覆盖的是"冷启动会炸整页"和"注册事实静默丢失"这两类只有跑起来才看得见的问题。
 1. **安装**：`plugin_manager` → `install_bundle`，target = **本包根目录**；确认返回 `application: applied` 且 `warnings` 为空。随后**把 `dsh-mixer-spike` 从 profile 卸掉**（否则原型与正式版同时注册 `main` 的 key、会话头按钮和 `/mixer`，行为不可预测）。
    **验收判据（profile 文件）**：`~/.dsh/profiles/web/package.json` 里应当只剩 `"dsh-mixer": "link:/Users/user/Documents/code/d/dsh-mixer"` 这一条 mixer 依赖，且 `dsh.profile.bundles` 里只列 `dsh-mixer`、**不含** `dsh-mixer-spike`（装之前那里写的是 spike）。
 2. **冷启动**（关键，别用热重载代替）：**硬刷新**页面，确认**没有** `Failed to load plugins` / `web boot: N entry did not activate`。任何 `apply()` 改动都必须重做这一步。
@@ -317,6 +321,9 @@ e.dataTransfer.setData('text/plain', node.id)   // node.id 就是 SessionId
 13. **新建不离开调音台**（需求2）：从 `会话` 浮层底部新建、按 56px 轨道上的新建按钮、按 `Cmd/Ctrl+Alt+N` —— **三个入口都留在调音台**（含宿主**复用已有空白会话**那一路，§5.1），新会话成为**第 0 个通道**且光标在它的输入框里；`×` 移出的通道不因此弹回；每格滚动位置回顶属已知代价（§5.1）。
 14. **虚影与让位**（需求3）：拖头部时虚影是**整个通道**（不是只有头部），原格半透明；拖动经过时其它通道让出空槽；拖到窗口外或按 `Esc` 取消后，原格透明度复原、不留空槽。
 15. **顶栏 B**（需求4）：顶栏只写 `调音台`，不出现具体工作区名；`会话` 浮层左列点一下只改「新建落点」且**不会离开调音台**；右列搜索即时过滤标题；`Esc` 与点外部都能关；勾选即增删通道。
+16. **空会话的光学位置**（第三轮）：新建的空白通道里，hero（logo + 输入框）看起来在**略高于几何中心**处，而不是「算居中但看着偏下」；不合适就调 `HERO_LIFT_PX` 一个数。
+17. **顶栏可读性**（第三轮）：`调音台`、`会话`、`常规视图` 与每格的视图标签都在 13px 档、一眼能读；`会话` 静止时就是一颗有底色有描边的按钮，不是一段文字。
+18. **浮层跳转**（第三轮）：`会话` 浮层里会话行与顶栏同档字号；点左列任一工作区，右列会滚到该工作区的分组。
 
 **验收记录（v1，2026-10-15，用户实测）**：在根包（`feat/mixer-v1` @ `5c8314b`，profile `web` 只装 `dsh-mixer`）上完成 —— 硬刷新冷启动**没有** `Failed to load plugins` / `web boot: N entry did not activate`；第 3–10 条逐条通过（含五档状态与左侧会话行逐档一致、持久化、归档联动、退出复原）。
 
@@ -411,6 +418,14 @@ agent 侧可复核的旁证（**只证明注册事实，不替代本清单的观
 | 10 | 抢回判据定为**"宿主 reveal 的会话是空白的"**（而不是"出现了新 id"），这样连"复用已有空白会话"那条宿主入口也覆盖 | §5.1 / ADR-0003 |
 | 11 | 新建失败在**顶栏**给一条带原因的提示（`data-mixer-create-error`），打开浮层时清掉 | §5.2 / §9.1 |
 
+### 9.0c 2026-10-15 第三轮：浏览器实测反馈（三条观感）
+
+| # | 反馈 | 处置 | 落点 |
+| --- | --- | --- | --- |
+| 1 | 空会话的 hero 虽居中但整体偏下，向上微调 | 注入作用域规则把 `[data-composer-seat]` 抬 24px（`HERO_LIFT_PX`，用 margin 不用 transform） | §4.4 / §6.16 |
+| 2 | 顶栏 `会话`、`调音台`、视图切换按钮字太小，`会话` 没有按钮样式 | 顶栏升到 13px 档（标签 13.5/600、chip 11.5px）；`会话` 静止即带底色描边；每格视图标签 13px | §5.2 / §5.3 / §6.17 |
+| 3 | `会话` 两级菜单字偏小；点左列工作区时期望右列滚到对应分组 | 浮层字号升到 13px 档（分组标题 12px、列宽 196/344）；左列兼作跳转表（`data-mixer-group` + `scrollIntoView`） | §5.2 / §6.18 |
+
 ### 9.1 仍开放
 
 - **钉住视图不写会话记忆**（§4.4 边界）：要"点了就记住"，需上游暴露 store 或 `selectView` 动作。
@@ -443,7 +458,7 @@ agent 侧可复核的旁证（**只证明注册事实，不替代本清单的观
 | `boot-check.mjs` | 冷启动守卫：真实 Cordis Context + 对照项，并断言 `main` 的 session 子槽与 board store |
 | `tests/seams.test.mjs` | `node --test` 覆盖 14 个纯函数缝 + 1 张文案表（20 个用例）；`client.js` 的返回值多挂一个 `__test` 字段把这些缝暴露给测试（宿主只读 `inject` / `apply`，其余键被忽略） |
 | `tests/render.test.mjs` | 用**宿主的真 React + react-dom/server** 把面板渲染成静态 HTML（10 个用例）：状态标记、面包屑、每格工厂内容、分栏把手、宽度落到 flex、空态、状态回落、**空会话必须拿到 hero 相位**、缺 store 的降级路径。纯函数测试看不见 React 层，靠这一层补 |
-| `tests/interaction.test.mjs` | 把面板挂进 **jsdom + react-dom/client**，用真事件驱动（17 个用例）：× 关闭后停靠并可从顶栏放回（且 retain 未释放）、`会话` 浮层勾选写 board 与本地标题过滤、左列只改"新建落点"且不导航、**新建走 `ctx.sessions.create` 并置顶 + 光标落在新格**、**刚新建完的主动离开不被抢回**、**复用同工作区空白会话**、**宿主入口的窄条件抢回（主动离开不抢）**、`Esc`/再点触发器/点浮层外三种关闭、**顶栏不出现工作区名而面板里出现**、**新建失败在顶栏可见**、**光标交接等迟到的 composer**、视图标签经工厂 seam 钉住 view、焦点标记、拖分界线（比例 + 380 夹紧 + 收尾）、头部拖动载荷（含**整格虚影** `setDragImage` 与 `.4` 占位）与「从 × 起拖被拒」、轨道 drop 重排并拒收非会话负载、**拖动时同宽空槽（让位）** |
+| `tests/interaction.test.mjs` | 把面板挂进 **jsdom + react-dom/client**，用真事件驱动（18 个用例）：× 关闭后停靠并可从顶栏放回（且 retain 未释放）、`会话` 浮层勾选写 board 与本地标题过滤、左列只改"新建落点"且不导航、**新建走 `ctx.sessions.create` 并置顶 + 光标落在新格**、**刚新建完的主动离开不被抢回**、**复用同工作区空白会话**、**宿主入口的窄条件抢回（主动离开不抢）**、`Esc`/再点触发器/点浮层外三种关闭、**顶栏不出现工作区名而面板里出现**、**新建失败在顶栏可见**、**光标交接等迟到的 composer**、**触发器要有按钮样式**、**点左列工作区滚动右列**、视图标签经工厂 seam 钉住 view、焦点标记、拖分界线（比例 + 380 夹紧 + 收尾）、头部拖动载荷（含**整格虚影** `setDragImage` 与 `.4` 占位）与「从 × 起拖被拒」、轨道 drop 重排并拒收非会话负载、**拖动时同宽空槽（让位）** |
 | `tests/store.test.mjs` | 用**宿主的真 store 引擎**跑持久化（5 个用例）：键名与 root 无后缀、坏数据逐字段兜底、第二个实例恢复、无 localStorage 时的可用性 |
 | `tests/sidebar.test.mjs` / `tests/labels.test.mjs` | 折叠幂等（5 个）与措辞对齐宿主字典（5 个） |
 | `tests/host-contract.test.mjs` | **宿主契约漂移哨兵**（6 个）：`external` 的名字仍在该 checkout 的平台静态表与 seed 表里、`inject` 每条边都指向真实存在的包、slot 注册仍提供 `store` 与 session 子槽座位、root store 仍以无 key 方式实例化、侧栏行状态的四个事实与三种 kind 仍在、轮次导航仍由容器查询隐藏。其中前两条是真检查（能真失败），其余是锚点检查（命中 = 机制还在，不等于行为不变） |
@@ -485,9 +500,9 @@ DSH_REPO=/新的/checkout 路径 npm run check
 | `blankTargetFor(list, workspace, archivedIds)` | 复用同工作区空白会话的挑选（§4.1，需求2） |
 | `shouldReclaimPanel({ leftMixer, activePanelId, revealed })` | 窄条件抢回面板（§5.1 / ADR-0003，需求2）：`revealed = { id, blank }` 来自宿主 `mainView` |
 
-另有两条行为常量，**只在文档与代码注释里约定、不进 `__test`**（它们不是判断，是时序参数，钉一个数字等于写同义反复）：`FOCUS_RETRY_FRAMES = 30`（光标交接等宿主 composer 出现的帧数上限，§5.1③）与 `RECLAIM_WINDOW_MS = 2000`（抢回判据的时效窗，§5.1）。
+另有三条行为常量，**只在文档与代码注释里约定、不进 `__test`**（它们不是判断，是时序参数，钉一个数字等于写同义反复）：`FOCUS_RETRY_FRAMES = 30`（光标交接等宿主 composer 出现的帧数上限，§5.1③）、`RECLAIM_WINDOW_MS = 2000`（抢回判据的时效窗，§5.1）与 `HERO_LIFT_PX = 48`（空会话 hero 的光学上调，§4.4）。
 
-后 4 条是 2026-10-15 第二轮新增（需求 1 / 2 / 4）。**用例数已落地**：v1 的 53 例 + 本轮 15 例 = **68 例**全绿（`seams` 新增 4 例、`render` 新增 1 例、`interaction` 新增 10 例）。`tests/harness.mjs` 的假宿主已补齐 `ctx.sessions.create` 的记录、`sessions.list` / `layout.panelInfo` 两个可订阅源（含 `setList` / `setPanelInfo` 驱动），并且 `useStore` 改成真的订阅 + 版本号重渲染——原来只读快照，导致"面板自己的写入"在测试里根本不会触发重渲染，`×` 关闭那条用例是靠别的原因才过的。
+后 4 条是 2026-10-15 第二轮新增（需求 1 / 2 / 4）。**用例数已落地**：v1 的 53 例 + 第二轮 15 例 = **68 例**全绿（`seams` +4、`render` +1、`interaction` +10）；第三轮再 +1（`interaction` 的「触发器要有按钮样」）= **69 例**。`tests/harness.mjs` 的假宿主已补齐 `ctx.sessions.create` 的记录、`sessions.list` / `layout.panelInfo` 两个可订阅源（含 `setList` / `setPanelInfo` 驱动），并且 `useStore` 改成真的订阅 + 版本号重渲染——原来只读快照，导致"面板自己的写入"在测试里根本不会触发重渲染，`×` 关闭那条用例是靠别的原因才过的。
 
 **验证**：`npm run check`（语法 + **53 个用例** + 冷启动）在本机全绿；**浏览器行为已由用户按 §6 十条在根包上验收通过**（2026-10-15，装根包 + 卸 `dsh-mixer-spike` + 硬刷新；见 §6 验收记录）。
-**第二轮（需求 1–4）实现后的验证**：`npm run check` = **68 个用例全绿** + 冷启动 `PASS`（2026-10-15）；**§6 第 12–15 条属观感项，仍待用户在浏览器里验收** —— 尤其"整格虚影"与"让位"两处只有真拖拽能验。
+**第二轮（需求 1–4）实现后的验证**：`npm run check` = **69 个用例全绿** + 冷启动 `PASS`（2026-10-15）；**§6 第 12–18 条属观感项，由用户在浏览器里逐条验收** —— 尤其"整格虚影"与"让位"两处只有真拖拽能验。

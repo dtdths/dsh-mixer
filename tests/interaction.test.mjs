@@ -132,6 +132,20 @@ test('interaction: the left column only changes where a new Session lands (§5.2
   /* Picking a workspace must NOT navigate: the removed 「切换到此工作区」 called
      uiWorkspace.openWorkspace(), which reveals and leaves the mixer (ADR-0003). */
   assert.deepEqual(ui.host.selectPanelCalls, [])
+  /* Round 3: the left column doubles as a jump list — each pick scrolls the right
+     column to that workspace's group. */
+  click(ui.$('[data-mixer-landing="w1"]'))
+  assert.deepEqual(ui.window.__scrolls, ['w2', 'w1'])
+})
+
+test('interaction: the 会话 trigger reads as a button, not as plain text (§5.2)', async () => {
+  const ui = await mountTwo()
+  const trigger = ui.$('[data-mixer-sessions]')
+  /* Round 3, user feedback "无按钮样式": the trigger used to be transparent until it was
+     opened. It must carry a visible surface and border at rest. */
+  assert.notEqual(trigger.style.background, '')
+  assert.notEqual(trigger.style.background, 'transparent')
+  assert.match(trigger.style.border, /^1px solid (?!transparent)/)
 })
 
 test('interaction: 新建会话 creates through the session service and lands first (§4.1/§5.1)', async () => {

@@ -133,6 +133,16 @@ window.__ModuleLoader__.load({
      */
     const FOCUS_RETRY_FRAMES = 30
     /**
+     * How many pixels ABOVE the host's own optical centre an empty channel's hero stack
+     * sits (round 3, user feedback: 位置虽居中但整体观感偏下). Applied as
+     * `margin-bottom`, NOT a transform: the host centres that stack with flex, so a
+     * bottom margin moves it up by half its value and keeps its layout math intact —
+     * whereas a transform would make the stack the containing block for the host's
+     * position:fixed pickers (`ConversationRoot.module.css` says so explicitly).
+     * Tunable: this single number is the whole adjustment.
+     */
+    const HERO_LIFT_PX = 48
+    /**
      * Persist key for the whole board (which Sessions are channels, plus their
      * relative widths), namespaced like ui-sidebar-right's `dsh.sidebar-right.v1`.
      *
@@ -505,28 +515,33 @@ window.__ModuleLoader__.load({
 
     const CSS = {
       root: { display: 'flex', flexDirection: 'column', height: '100%', minHeight: 420, minWidth: 0, background: T.base, color: T.fg },
-      /* Unified top bar: mixer label, workspace dropdown, waiting summary,
-         view exit. Global entries deliberately absent, see the note in TopBar. */
+      /* Unified top bar: mixer label, the 会话 panel, waiting summary, view exit.
+         Global entries deliberately absent, see the note in TopBar.
+         Type scale (round 3, user feedback "字体较小，不够明显"): the bar reads at
+         13px, its label at 13.5/600, chips at 11.5 — the same step up the pane header
+         took earlier; do not drift back to the 10–12px band. */
       topbar: {
         display: 'flex', alignItems: 'center', gap: 8, flex: '0 0 auto', flexWrap: 'wrap',
-        padding: '6px 12px', borderBottom: `1px solid ${T.b1}`, font: `12px/1.6 ${SANS}`,
+        padding: '7px 12px', borderBottom: `1px solid ${T.b1}`, font: `13px/1.6 ${SANS}`,
         background: T.base,
       },
-      topTitle: { fontWeight: 600 },
+      topTitle: { fontWeight: 600, fontSize: 13.5 },
       divider: { width: 1, height: 18, background: T.b1, flex: '0 0 auto' },
+      /* The 会话 trigger must READ as a button (round 3: "无按钮样式" it was
+         transparent until opened). */
       navBtn: {
-        font: `12px/1.4 ${SANS}`, padding: '3px 9px', cursor: 'pointer', borderRadius: PILL,
-        color: T.fg, background: 'transparent', border: `1px solid transparent`,
+        font: `13px/1.4 ${SANS}`, padding: '4px 11px', cursor: 'pointer', borderRadius: PILL,
+        color: T.fg, background: T.l1, border: `1px solid ${T.b1}`, fontWeight: 600,
       },
-      navBtnOn: { background: T.l2, border: `1px solid ${T.b1}` },
+      navBtnOn: { background: T.l2, border: `1px solid ${T.b2}` },
       button: {
-        font: `12px/1.4 ${SANS}`, padding: '3px 10px', cursor: 'pointer', borderRadius: PILL,
+        font: `13px/1.4 ${SANS}`, padding: '4px 11px', cursor: 'pointer', borderRadius: PILL,
         color: T.fg, background: T.l2, border: `1px solid ${T.b1}`,
       },
       chip: {
         flex: '0 0 auto', display: 'inline-flex', alignItems: 'center', gap: 6,
-        padding: '1px 7px', borderRadius: PILL, background: T.l2,
-        border: `1px solid ${T.b1}`, color: T.fg2, font: `10px/1.8 ${SANS}`,
+        padding: '2px 8px', borderRadius: PILL, background: T.l2,
+        border: `1px solid ${T.b1}`, color: T.fg2, font: `11.5px/1.8 ${SANS}`,
       },
       dot: { width: 7, height: 7, borderRadius: PILL, background: T.warn, flex: '0 0 auto' },
       ddWrap: { position: 'relative' },
@@ -541,39 +556,39 @@ window.__ModuleLoader__.load({
         boxShadow: '0 8px 28px rgba(0,0,0,.22)', maxHeight: '62vh',
       },
       panelColLeft: {
-        width: 178, flex: '0 0 auto', borderRight: `1px solid ${T.b1}`, padding: 4, overflow: 'auto',
+        width: 196, flex: '0 0 auto', borderRight: `1px solid ${T.b1}`, padding: 4, overflow: 'auto',
       },
-      panelColRight: { width: 320, flex: '0 0 auto', display: 'flex', flexDirection: 'column', minHeight: 0 },
-      panelHead: { padding: '5px 8px', color: T.fg2, font: `10.5px/1.6 ${SANS}` },
-      panelGroup: { padding: '5px 8px 2px', color: T.fg2, font: `10.5px/1.6 ${SANS}` },
+      panelColRight: { width: 344, flex: '0 0 auto', display: 'flex', flexDirection: 'column', minHeight: 0 },
+      panelHead: { padding: '5px 8px', color: T.fg2, font: `12px/1.6 ${SANS}` },
+      panelGroup: { padding: '6px 8px 2px', color: T.fg2, font: `12px/1.6 ${SANS}` },
       panelRows: { flex: 1, minHeight: 0, overflow: 'auto', padding: 4 },
-      panelEmpty: { padding: '4px 8px', color: T.fg2, font: `11.5px/1.6 ${SANS}` },
+      panelEmpty: { padding: '4px 8px', color: T.fg2, font: `12.5px/1.6 ${SANS}` },
       panelFoot: {
-        display: 'flex', alignItems: 'center', gap: 8, padding: '5px 8px', borderTop: `1px solid ${T.b1}`,
+        display: 'flex', alignItems: 'center', gap: 8, padding: '6px 8px', borderTop: `1px solid ${T.b1}`,
       },
-      panelHint: { color: T.fg2, font: `10.5px/1.6 ${SANS}`, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+      panelHint: { color: T.fg2, font: `11.5px/1.6 ${SANS}`, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
       landingRow: {
-        display: 'flex', alignItems: 'center', gap: 6, padding: '5px 8px', cursor: 'pointer',
-        font: `12px/1.6 ${SANS}`, borderRadius: SURFACE,
+        display: 'flex', alignItems: 'center', gap: 6, padding: '6px 8px', cursor: 'pointer',
+        font: `13px/1.6 ${SANS}`, borderRadius: SURFACE,
       },
-      landingRowOn: { background: T.l1 },
+      landingRowOn: { background: T.l1, fontWeight: 600 },
       landingTag: {
         flex: '0 0 auto', padding: '1px 6px', borderRadius: PILL, background: T.l2,
-        border: `1px solid ${T.b1}`, color: T.fg2, font: `10px/1.7 ${SANS}`,
+        border: `1px solid ${T.b1}`, color: T.fg2, font: `11px/1.7 ${SANS}`,
       },
-      searchRow: { padding: '5px 8px', borderBottom: `1px solid ${T.b1}` },
+      searchRow: { padding: '6px 8px', borderBottom: `1px solid ${T.b1}` },
       searchInput: {
-        width: '100%', font: `12px/1.6 ${SANS}`, padding: '4px 7px', borderRadius: SURFACE,
+        width: '100%', font: `13px/1.6 ${SANS}`, padding: '5px 8px', borderRadius: SURFACE,
         background: T.l1, color: T.fg, border: `1px solid ${T.b1}`, outline: 'none',
       },
       sessionRow: {
-        display: 'flex', alignItems: 'center', gap: 7, padding: '3px 6px', cursor: 'pointer',
-        font: `11.5px/1.6 ${SANS}`, borderRadius: SURFACE,
+        display: 'flex', alignItems: 'center', gap: 7, padding: '4px 7px', cursor: 'pointer',
+        font: `13px/1.6 ${SANS}`, borderRadius: SURFACE,
       },
       rowWarnDot: { width: 7, height: 7, flex: '0 0 auto', borderRadius: PILL, background: T.warn },
       rowTag: {
         flex: '0 0 auto', padding: '1px 6px', borderRadius: PILL, background: T.l2,
-        border: `1px solid ${T.b1}`, color: T.fg2, font: `10px/1.7 ${SANS}`,
+        border: `1px solid ${T.b1}`, color: T.fg2, font: `11px/1.7 ${SANS}`,
       },
       /* Channel row: a flex track (not a grid) because dividers are draggable.
          Horizontal overflow stays deliberate: cells keep MIN_PANE_W and the row
@@ -623,12 +638,12 @@ window.__ModuleLoader__.load({
       /* Breadcrumb: ancestors are plain text (this pane IS the destination), the
          last crumb carries the weight. */
       crumbs: { display: 'flex', alignItems: 'center', gap: 6, minWidth: 0, overflow: 'hidden' },
-      crumb: { color: T.fg2, fontSize: 12.5, overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 180 },
+      crumb: { color: T.fg2, fontSize: 13, overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 180 },
       crumbCurrent: {
         color: T.fg, fontWeight: 600, fontSize: 14, overflow: 'hidden',
         textOverflow: 'ellipsis', maxWidth: 280,
       },
-      crumbSep: { color: T.fg2, opacity: 0.6, fontSize: 12.5 },
+      crumbSep: { color: T.fg2, opacity: 0.6, fontSize: 13 },
       /* Running indicator: the host's own StateDot, same as the sidebar rows.
          These two styles only cover the wrapper and the no-primitives fallback. */
       runningWrap: { flex: '0 0 auto', display: 'inline-flex', alignItems: 'center', gap: '4px' },
@@ -650,7 +665,7 @@ window.__ModuleLoader__.load({
         padding: '0 12px', borderBottom: `1px solid ${T.b1}`,
       },
       viewTab: {
-        font: `12.5px/1.6 ${SANS}`, padding: '6px 11px', cursor: 'pointer', borderRadius: 0,
+        font: `13px/1.6 ${SANS}`, padding: '7px 12px', cursor: 'pointer', borderRadius: 0,
         color: T.fg2, background: 'transparent', border: 'none',
         borderBottom: '2px solid transparent',
       },
@@ -728,6 +743,19 @@ window.__ModuleLoader__.load({
       } = props
       const [query, setQuery] = useState('')
       const needle = query.trim()
+      /* The right column scrolls to the workspace picked on the left (round 3: 左列同时
+         当跳转表用) — the two columns are one control, not two. */
+      const rowsRef = useRef(null)
+      const pickLanding = (workspaceId) => {
+        onPickLanding(workspaceId)
+        const rows = rowsRef.current
+        if (rows === null || typeof rows.querySelectorAll !== 'function') return
+        const group = [...rows.querySelectorAll('[data-mixer-group]')]
+          .find(node => node.getAttribute('data-mixer-group') === workspaceId)
+        if (group !== undefined && typeof group.scrollIntoView === 'function') {
+          group.scrollIntoView({ block: 'start' })
+        }
+      }
       /* Local title filtering on purpose: the host's full-content search is a
          different feature (request-local results, loading/error handling) and is
          recorded as phase 2 (spec §9.1). */
@@ -754,7 +782,7 @@ window.__ModuleLoader__.load({
                   },
                   'data-mixer-landing': workspace.workspaceId,
                   title: `新建会话落在此工作区：${workspace.path}`,
-                  onClick: () => onPickLanding(workspace.workspaceId),
+                  onClick: () => pickLanding(workspace.workspaceId),
                 },
                   h('span', {
                     style: { flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
@@ -775,12 +803,12 @@ window.__ModuleLoader__.load({
                 'data-mixer-search': '',
                 onChange: event => setQuery(event.target.value),
               })),
-            h('div', { style: CSS.panelRows },
+            h('div', { style: CSS.panelRows, ref: rowsRef },
               workspaces.length === 0
                 ? h('div', { style: CSS.panelEmpty }, '还没有工作区')
                 : workspaces.map(workspace => {
                     const ids = (workspace.sessionIds || []).filter(matches)
-                    return h('div', { key: workspace.workspaceId },
+                    return h('div', { key: workspace.workspaceId, 'data-mixer-group': workspace.workspaceId },
                       h('div', { style: CSS.panelGroup }, workspace.title),
                       ids.length === 0
                         ? h('div', { style: CSS.panelEmpty },
@@ -1540,6 +1568,12 @@ window.__ModuleLoader__.load({
         h('style', { key: 'mixer-rail-breakpoint' },
           `@container (min-width:${RAIL_MIN_CONTAINER_W}px){`
           + '[data-mixer-pane] [class*="_slot"]>[class*="_frame"]{display:block}}'),
+        /* Empty-channel optical lift (round 3). Scoped to our panes and to the hero
+           phase, on the host's own stable hook for the composer seat; margin-bottom is
+           what moves a flex-centred item up without a transform (see HERO_LIFT_PX). */
+        h('style', { key: 'mixer-hero-lift' },
+          `[data-mixer-pane] [data-content-phase="hero"] [data-composer-seat]{`
+          + `margin-bottom:${HERO_LIFT_PX}px}`),
         h(TopBar, {
           channels: visible,
           hiddenCount: parked.length,
