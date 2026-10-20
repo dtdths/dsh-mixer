@@ -213,6 +213,55 @@ window.__ModuleLoader__.load({
     }
 
     /**
+     * One runner for every host call this panel makes (spec §5.2).
+     *
+     * The rule it exists for is "a click must never do nothing": a missing service method,
+     * a synchronous throw, and a rejected promise all have to reach the user, and the
+     * in-flight row has to show it. That choreography was copy-pasted per call site
+     * (create / archive / stop-and-archive / unarchive) and each copy drifted a little.
+     * It lives here once; a call site declares only what is specific to it.
+     * @param hooks - `notify` writes the bar's one-line notice (undefined clears it),
+     *   `pending` is the in-flight marker used by row actions.
+     * @returns `run(spec)`: run one host call and report every outcome through the hooks.
+     */
+    function createHostCalls({ notify, pending }) {
+      return function run(spec) {
+        notify(undefined)
+        if (spec.available === false) {
+          notify(spec.unavailable)
+          return
+        }
+        if (spec.pendingId !== undefined) pending(spec.pendingId)
+        let attempt
+        try {
+          attempt = spec.call()
+        } catch (error) {
+          pending(undefined)
+          console.error(`[mixer] ${spec.label} threw`, error)
+          notify(`${spec.label}失败：${errorText(error)}`)
+          return
+        }
+        Promise.resolve(attempt).then(
+          (result) => {
+            pending(undefined)
+            if (spec.onDone !== undefined) spec.onDone(result)
+          },
+          (reason) => {
+            pending(undefined)
+            /* A refusal the site knows how to act on (the host's "work is running") turns
+               into an offer instead of an error; everything else is a plain failure. */
+            if (spec.confirmWhen !== undefined && spec.confirmWhen(reason)) {
+              if (spec.onConfirm !== undefined) spec.onConfirm(reason)
+              return
+            }
+            console.error(`[mixer] ${spec.label} rejected`, reason)
+            notify(`${spec.label}失败：${errorText(reason)}`)
+          },
+        )
+      }
+    }
+
+    /**
      * Persist key for the whole board (which Sessions are channels, plus their
      * relative widths), namespaced like ui-sidebar-right's `dsh.sidebar-right.v1`.
      *
@@ -2067,17 +2116,21 @@ window.__ModuleLoader__.load({
         /* `ctx.sessions.create`, not `uiWorkspace.startSession`: the host's path is
            `openWorkspace → replaceMain(…, 'reveal') → selectPanel(null)`, which would
            throw the user out of the mixer (ADR-0003). */
-        void createSession(workspaceId).then((result) => {
-          const sessionId = result === undefined ? undefined : result.sessionId
-          if (sessionId === undefined || sessionId === null || sessionId === '') {
-            /* Silently doing nothing would be worse than the host path it replaces. */
-            setNotice(result === undefined || result.error === undefined
-              ? '新建会话失败'
-              : `新建会话失败：${errorText(result.error)}`)
-            return
-          }
-          setNotice(undefined)
-          acceptNewChannel(sessionId)
+        runHostCall({
+          label: '新建会话',
+          call: () => createSession(workspaceId),
+          onDone: (result) => {
+            const sessionId = result === undefined ? undefined : result.sessionId
+            if (sessionId === undefined || sessionId === null || sessionId === '') {
+              /* Resolved, but with no Session: silently doing nothing would be worse than
+                 the host path this replaces. */
+              setNotice(result === undefined || result.error === undefined
+                ? '新建会话失败'
+                : `新建会话失败：${errorText(result.error)}`)
+              return
+            }
+            acceptNewChannel(sessionId)
+          },
         })
       }
       /* Archiving from the panel goes through the same service call the sidebar's row
@@ -2087,25 +2140,13 @@ window.__ModuleLoader__.load({
          service that is not there at all. "Click, nothing happens" was the reported
          symptom once already; a handler that only logs to the console is exactly how
          that reads from the user's side. */
-      const archiveChannel = (sessionId) => {
-        setNotice(undefined)
-        setArchiveConfirm(undefined)
-        if (typeof archiveSession !== 'function') {
-          setNotice('归档不可用：宿主没有提供 archiveSession')
-          return
-        }
-        setArchivePending(sessionId)
-        runArchive(sessionId, undefined)
-      }
-      const stopAndArchiveChannel = (sessionId) => {
-        setNotice(undefined)
-        setArchiveConfirm(undefined)
-        setArchivePending(sessionId)
-        runArchive(sessionId, { stopActivity: true })
-      }
+      /* Archiving goes through the same service call the sidebar's row action uses. The
+         host refuses while work is running; that refusal becomes an inline "stop and
+         archive" offer rather than a dead click (spec §5.2). */
+      const runHostCall = createHostCalls({ notify: setNotice, pending: setArchivePending })
       /* Archive is destructive and one-way by default; the bar offers the same 6 s undo
-         the sidebar's archived toast does (spec §5.2, issue #12). Enough is remembered to
-         put the channel back exactly where it was, width included. */
+         the sidebar's archived toast does (spec §5.2). Enough is remembered to put the
+         channel back exactly where it was, width included. */
       const noteArchiveUndo = (sessionId) => {
         const index = currentBoard.indexOf(sessionId)
         const summary = summaries[sessionId]
@@ -2116,56 +2157,45 @@ window.__ModuleLoader__.load({
           weight: weights[sessionId],
         })
       }
-      const runArchive = (sessionId, options) => {
-        let attempt
-        try {
-          attempt = archiveSession(sessionId, options)
-        } catch (error) {
-          console.error('[mixer] archive call threw', error)
-          setArchivePending(undefined)
-          setNotice(`归档失败：${errorText(error)}`)
-          return
-        }
-        Promise.resolve(attempt).then(
-          () => { setArchivePending(undefined); noteArchiveUndo(sessionId) },
-          (reason) => {
-            setArchivePending(undefined)
-            /* A follow-up "stop and archive" failure is a plain failure: asking again
-               would loop. */
-            if (options !== undefined || archiveActivityOf(reason) === undefined) {
-              console.error('[mixer] archive rejected', reason)
-              setNotice(`归档失败：${errorText(reason)}`)
-              return
-            }
-            setArchiveConfirm({ sessionId })
-          },
-        )
+      const archiveChannel = (sessionId) => {
+        setArchiveConfirm(undefined)
+        runHostCall({
+          label: '归档',
+          available: typeof archiveSession === 'function',
+          unavailable: '归档不可用：宿主没有提供 archiveSession',
+          pendingId: sessionId,
+          call: () => archiveSession(sessionId),
+          onDone: () => noteArchiveUndo(sessionId),
+          confirmWhen: (reason) => archiveActivityOf(reason) !== undefined,
+          onConfirm: () => setArchiveConfirm({ sessionId }),
+        })
+      }
+      const stopAndArchiveChannel = (sessionId) => {
+        setArchiveConfirm(undefined)
+        runHostCall({
+          label: '归档',
+          available: typeof archiveSession === 'function',
+          unavailable: '归档不可用：宿主没有提供 archiveSession',
+          pendingId: sessionId,
+          call: () => archiveSession(sessionId, { stopActivity: true }),
+          onDone: () => noteArchiveUndo(sessionId),
+        })
       }
       /* Undo = the host's own `unarchiveSession` (the exact call the sidebar's archived
-         toast makes through `undoArchive`), then put the channel back. A failed undo must
-         be visible: the chip is gone by then, so the bar's notice takes over — the same
-         "a click that only logs is a dead click" rule as for archive. */
+         toast makes through `undoArchive`), then put the channel back. */
       const undoArchivedChannel = () => {
         const record = undoArchive
         if (record === undefined) return
         setUndoArchive(undefined)
-        if (typeof unarchiveSession !== 'function') {
-          setNotice('撤销归档不可用：宿主没有提供 unarchiveSession')
-          return
-        }
-        let attempt
-        try {
-          attempt = unarchiveSession(record.sessionId)
-        } catch (error) {
-          console.error('[mixer] unarchive call threw', error)
-          setNotice(`撤销归档失败：${errorText(error)}`)
-          return
-        }
-        Promise.resolve(attempt).then(
-          () => {
+        runHostCall({
+          label: '撤销归档',
+          available: typeof unarchiveSession === 'function',
+          unavailable: '撤销归档不可用：宿主没有提供 unarchiveSession',
+          call: () => unarchiveSession(record.sessionId),
+          onDone: () => {
             if (record.index === undefined) return
-            /* Keep the prune effect from dropping the restored channel again while the host
-               snapshot still calls it archived. */
+            /* Keep the prune effect from dropping the restored channel again while the
+               host snapshot still calls it archived. */
             ledger.note(record.sessionId, 'returned')
             unpark(record.sessionId)
             const next = [...channelsRef.current]
@@ -2176,11 +2206,7 @@ window.__ModuleLoader__.load({
               actions.setWeights({ ...weightsRef.current, [record.sessionId]: record.weight })
             }
           },
-          (reason) => {
-            console.error('[mixer] unarchive rejected', reason)
-            setNotice(`撤销归档失败：${errorText(reason)}`)
-          },
-        )
+        })
       }
       /* One path for both drag gestures: a channel head dragged inside the track and a
          session row dragged in from the sidebar (both publish the SessionId as
@@ -2349,6 +2375,7 @@ window.__ModuleLoader__.load({
       subagentCatalogOf,
       normalizeBoard,
       createChannelLedger,
+      createHostCalls,
       moveChannel,
       heroFor,
       blankTargetFor,

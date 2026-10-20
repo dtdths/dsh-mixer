@@ -19,6 +19,7 @@ const {
   subagentCatalogOf,
   normalizeBoard,
   createChannelLedger,
+  createHostCalls,
   moveChannel,
   heroFor,
   blankTargetFor,
@@ -228,6 +229,62 @@ test('heroFor: a blank Session gets the host hero phase, everything else stays d
   assert.deepEqual(heroFor(undefined), { phase: 'active', hero: false })
   assert.deepEqual(heroFor(null), { phase: 'active', hero: false })
   assert.deepEqual(heroFor({}), { phase: 'active', hero: false })
+})
+
+/*
+ * Spec §5.2: one runner owns "a click must never do nothing". Each failure mode is
+ * proved here once, instead of once per host action.
+ */
+test('createHostCalls: missing method, sync throw, rejection and refusal all report', async () => {
+  const notices = []
+  const pending = []
+  const confirmations = []
+  const run = createHostCalls({
+    notify: text => notices.push(text),
+    pending: id => pending.push(id),
+  })
+  const settle = () => new Promise(resolve => setTimeout(resolve, 0))
+
+  /* The service method is not there at all. */
+  run({ label: '归档', available: false, unavailable: '归档不可用：宿主没有提供 archiveSession', call: () => undefined })
+  assert.deepEqual(notices, [undefined, '归档不可用：宿主没有提供 archiveSession'])
+  assert.deepEqual(pending, [])
+
+  /* A synchronous throw is the exact shape of "I clicked and nothing happened". */
+  notices.length = 0
+  run({ label: '归档', pendingId: 's1', call: () => { throw new TypeError('boom') } })
+  assert.equal(notices[notices.length - 1], '归档失败：boom')
+  assert.deepEqual(pending, ['s1', undefined])
+
+  /* A rejection, with the in-flight marker cleared on the way out. */
+  notices.length = 0
+  pending.length = 0
+  run({ label: '新建会话', call: () => Promise.reject(new Error('writer held')) })
+  await settle()
+  assert.equal(notices[notices.length - 1], '新建会话失败：writer held')
+
+  /* A refusal the site understands becomes an offer, not an error line. */
+  notices.length = 0
+  run({
+    label: '归档',
+    call: () => Promise.reject(Object.assign(new Error('session active'), {
+      name: 'WorkspaceArchiveError',
+      rpcError: { code: 'workspace/session-active' },
+    })),
+    confirmWhen: reason => archiveActivityOf(reason) !== undefined,
+    onConfirm: () => confirmations.push('s1'),
+  })
+  await settle()
+  assert.deepEqual(confirmations, ['s1'])
+  assert.deepEqual(notices, [undefined])
+
+  /* Success hands the result to the site and clears the pending marker. */
+  pending.length = 0
+  let done
+  run({ label: '归档', pendingId: 's2', call: () => Promise.resolve('ok'), onDone: result => { done = result } })
+  await settle()
+  assert.equal(done, 'ok')
+  assert.deepEqual(pending, ['s2', undefined])
 })
 
 /*
