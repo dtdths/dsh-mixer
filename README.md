@@ -29,9 +29,9 @@ DSH 原有界面增加一个**视图切换**按钮 / 指令，在「常规形态
 
 ## 状态
 
-**设计定稿，根包 `dsh-mixer` 已实现（分支 `feat/mixer-v1`），待装到 profile 上按清单验收。**
+**v1 已完成并发布：tag [`v1.0.0`](https://github.com/dtdths/dsh-mixer/releases/tag/v1.0.0)，`main` 与 `feat/mixer-v1` 同点。** 四条用户需求（空会话居中 / 新建不离开调音台 / 整格拖拽虚影 / 顶栏重做）与归档能力都已实现，并在真实 DSH 宿主上按 [`docs/spec.md`](docs/spec.md) §6 逐条验收通过（`npm run check` = 79 用例 + 冷启动守卫）。
 
-- **[`docs/spec.md`](docs/spec.md) 是交接物**：§1–§8 是设计，**§11 是正式版实现状态**（文件、内部缝、验证命令）。
+- **[`docs/spec.md`](docs/spec.md) 是交接物**：§1–§8 是设计，**§11 是正式版实现状态**（文件、内部缝、验证命令、逐轮验收记录）。
 - 设计由一次性原型验证（分支 [`spike/mixer-two-pane`](https://github.com/dtdths/dsh-mixer/tree/spike/mixer-two-pane) 的 `spike/` 包 `dsh-mixer-spike`），机制已全部搬进根包；**装根包后请把 spike 卸掉**。
 - 原型已实测确认关键前提：**多会话真并排可行**（每格渲染官方 composer 与完整对话记录）。
 - Host half 保持空 —— 本需求无需 Host 改动。
@@ -61,22 +61,57 @@ dsh-mixer/
 
 原型（`spike/`）只在 `spike/mixer-two-pane` 分支上，保留作对照，不参与根包运行。
 
-## 安装与验证
+## 安装
 
-只装 Client half，从本仓库目录安装：
+只装 **Client half**（Host half 是空的），三种方式按需要选。装完都要把原型包 `dsh-mixer-spike` 从 profile 卸掉 —— 它和正式版会抢同一个 `main` key。
+
+**A. 从仓库目录装（开发 / 日常，热更新）** —— 当前开发机就是这种：
 
 ```
-plugin_manager → install_bundle，target = 本包根目录
-# 然后从 profile 里卸掉 dsh-mixer-spike（原型与正式版会抢同一个 main key）
+plugin_manager → install_bundle，target = 本包根目录的绝对路径
 ```
+
+profile 里会写成 `"dsh-mixer": "link:/…/dsh-mixer"`；之后改代码、刷新页面即生效（改了 `apply()` / `inject` 必须硬刷新，见下方验证第 2 条）。
+
+**B. 从 tag 装（冻结版本，推荐给别人 / 另一台机器）**：
+
+```
+plugin_manager → install_bundle，target = "github:dtdths/dsh-mixer#v1.0.0"
+```
+
+装进 `node_modules` 的是**快照**，不会热更新；升级就是重新装一个新 tag。
+
+**C. tarball（离线 / 内网 / 不想让它连 GitHub）**：
+
+```bash
+npm pack --cache /tmp/npm-cache        # 产出 dsh-mixer-1.0.0.tgz
+# 把 tgz 传过去，然后：
+plugin_manager → install_bundle，target = "/绝对路径/dsh-mixer-1.0.0.tgz"
+```
+
+**不发布 npm**：`package.json` 是 `private: true`，交付形态就是上面三种。
+
+## 验证
 
 拉代码后先跑自动化（无需浏览器）：
 
 ```bash
-npm run check        # 语法 + 纯函数测试 + 冷启动守卫
+npm run check                          # 语法 + 79 个用例 + 冷启动守卫
+DSH_REPO=/别的/DSH/checkout npm run check   # 换宿主重验：契约漂移会指到具体文件与断言
 ```
 
-profile 会生成一条 `link:`，改代码后刷新即生效。**装完的验证清单见 [docs/spec.md](docs/spec.md) §6**（其中第 2 条"硬刷新冷启动"是必须做的 —— 任何 `apply()` 改动都不能只靠热重载验证）。
+装完的浏览器验收清单见 [docs/spec.md](docs/spec.md) §6 —— 其中**第 2 条"硬刷新冷启动"必须做**（任何 `apply()` 改动都不能只靠热重载验证）。
+
+profile 侧判据：依赖是 `link:/…` 或 `github:…#tag`（或 tgz），`dsh.profile.bundles` 里有 `dsh-mixer` 且**没有** `dsh-mixer-spike`；硬刷新后没有 `Failed to load plugins` / `web boot: N entry did not activate`；会话头出现「调音台」按钮，`/mixer` 可用。
+
+## 发布
+
+1. `npm run check` 绿；再对目标 DSH 宿主跑一次 `DSH_REPO=… npm run check`。
+2. 把 `package.json` 的 `version` bump 到与 tag 一致（v1.0.0 对应 `1.0.0`）。
+3. 提交后合入默认分支：`git checkout main && git merge --ff-only feat/mixer-v1 && git push origin main`。
+4. 打 tag 并推送：`git tag -a v1.0.0 -m "dsh-mixer v1.0.0" && git push origin v1.0.0`。
+5. `gh release create v1.0.0 --title … --notes-file …`：notes 里写**安装命令**（B 方式那行）与**验证过的 DSH runtime 版本**（v1.0.0 对 `0.2.1-alpha.1` / checkout `5badb15` 验证）。
+6. 发完复核：`gh release view v1.0.0`、`git ls-remote --tags origin`，以及全新 profile 上按 B 方式装一次、走 §6 清单。
 
 ## License
 
