@@ -1032,6 +1032,71 @@ window.__ModuleLoader__.load({
       return chain.reverse()
     }
 
+    /**
+     * Requirement 3: the drag image is a WHOLE channel, but it cannot be a snapshot
+     * of the live pane.
+     *
+     * Blink builds that snapshot as the union of the dragged element and EVERY
+     * descendant's layout box (`AbsoluteBoundingBoxRectIncludingDescendants`,
+     * layout_object.cc:2369), then clamps it to 8192px (data_transfer.cc,
+     * `DraggedNodeImageBuilder::CreateImage`). For a hero channel nothing
+     * overflows, so the union is the cell itself and the ghost looks right — which
+     * is why this only went wrong for channels that have a transcript: the scrolled
+     * content inside the transcript's scroll container has layout boxes thousands of
+     * pixels down, the union hits the clamp, and what the browser draws is no longer
+     * a cell (reported in the browser 2026-10-20). `overflow: hidden` cannot fix
+     * that: it clips paint, not layout boxes.
+     *
+     * So the picture is a stand-in of the same box: the two real header rows cloned
+     * verbatim (React writes both as inline styles, so a clone renders identically)
+     * over an empty body, plus a hairline so it reads as a surface while it floats.
+     * The transcript is the one thing it cannot carry: HTML5 has no "snapshot only
+     * the visible part" (spec §5.3).
+     *
+     * It has to be in the document (a detached element has no layout object, and the
+     * snapshot then silently falls back to the default head image), but it is put
+     * off-screen so it never paints.
+     */
+    function buildDragGhost(pane, head, rect) {
+      const doc = pane.ownerDocument
+      if (doc === null || doc === undefined || doc.body === null) return null
+      if (!(rect.width > 0) || !(rect.height > 0)) return null
+      /* A drag cancelled in some way that never reached us may have left one behind. */
+      for (const stale of doc.body.querySelectorAll('[data-mixer-drag-ghost]')) stale.remove()
+      const ghost = doc.createElement('div')
+      Object.assign(ghost.style, {
+        position: 'fixed',
+        /* Rendered (the snapshot needs a layout object) but never painted. */
+        left: '-10000px',
+        top: `${rect.top}px`,
+        width: `${rect.width}px`,
+        height: `${rect.height}px`,
+        display: 'flex',
+        flexDirection: 'column',
+        overflow: 'hidden',
+        background: T.base,
+        border: `1px solid ${T.b2}`,
+        boxSizing: 'border-box',
+        pointerEvents: 'none',
+      })
+      ghost.setAttribute('data-mixer-drag-ghost', '')
+      ghost.appendChild(head.cloneNode(true))
+      const tabs = pane.querySelector('[data-mixer-view-tabs]')
+      if (tabs !== null) ghost.appendChild(tabs.cloneNode(true))
+      ghost.appendChild(doc.createElement('div')).style.flex = '1 auto'
+      /* Strip the hooks the view and the tests navigate by, so the stand-in cannot be
+         mistaken for a live pane during the one task it exists. */
+      for (const node of ghost.querySelectorAll(
+        '[data-mixer-head],[data-mixer-close],[data-mixer-view-tabs],[data-mixer-view]',
+      )) {
+        for (const name of ['data-mixer-head', 'data-mixer-close', 'data-mixer-view-tabs', 'data-mixer-view']) {
+          node.removeAttribute(name)
+        }
+      }
+      doc.body.appendChild(ghost)
+      return ghost
+    }
+
     function Pane(props) {
       const {
         sessionId, summary, summaries, waitingKind, views, state,
@@ -1090,9 +1155,10 @@ window.__ModuleLoader__.load({
             event.dataTransfer.effectAllowed = 'move'
             event.dataTransfer.setData('text/plain', sessionId)
             /* Requirement 3: the browser's default drag image is the element carrying
-               `draggable` — this head row — so hand it the whole pane instead. The
-               snapshot is taken once, right here; HTML5 has no live drag image, which
-               is why "跟手" would mean giving up this API (spec §5.3). */
+               `draggable` — this head row — so hand it a whole-channel picture instead.
+               It cannot be the live pane (see buildDragGhost); the snapshot is taken
+               once, right here, and HTML5 has no live drag image, which is why "跟手"
+               would mean giving up this API (spec §5.3). */
             const pane = typeof event.currentTarget.closest === 'function'
               ? event.currentTarget.closest('[data-mixer-pane]')
               : null
@@ -1100,7 +1166,13 @@ window.__ModuleLoader__.load({
               const rect = pane.getBoundingClientRect()
               const offsetX = Number.isFinite(event.clientX) ? event.clientX - rect.left : 0
               const offsetY = Number.isFinite(event.clientY) ? event.clientY - rect.top : 0
-              event.dataTransfer.setDragImage(pane, offsetX, offsetY)
+              const ghost = buildDragGhost(pane, event.currentTarget, rect)
+              event.dataTransfer.setDragImage(ghost === null ? pane : ghost, offsetX, offsetY)
+              if (ghost !== null) {
+                /* Blink takes the snapshot synchronously after this handler returns
+                   (DragController::StartDrag), so the stand-in can go on the next task. */
+                setTimeout(() => { if (ghost.isConnected) ghost.remove() }, 0)
+              }
             }
             onDragStateChange(sessionId)
           },

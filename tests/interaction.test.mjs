@@ -530,15 +530,33 @@ test('interaction: dragging a divider writes proportional weights, clamped at 38
 test('interaction: a channel head drags with the sidebar\'s own payload (§5.4b)', async () => {
   const ui = await mountTwo()
   const { act, window } = ui
+  /* jsdom reports no layout: the stand-in is sized from the pane's own rect. */
+  const pane = ui.$('[data-mixer-pane="s1"]')
+  pane.getBoundingClientRect = () => ({
+    left: 100, width: 420, right: 520, top: 0, bottom: 880, height: 880, x: 100, y: 0,
+  })
   const head = ui.$$('[data-mixer-head]')[0]
   const transfer = fakeDataTransfer(null)
-  const start = dragEvent(window, 'dragstart', transfer)
+  const start = dragEvent(window, 'dragstart', transfer, { clientX: 140, clientY: 24 })
   act(() => { head.dispatchEvent(start) })
   assert.deepEqual(transfer.written['text/plain'], 's1')
   assert.equal(transfer.effectAllowed, 'move')
-  /* Requirement 3: the drag image is the WHOLE pane, not the head row the browser
-     would snapshot by default. */
-  assert.equal(transfer.written.dragImage.element.getAttribute('data-mixer-pane'), 's1')
+  /* Requirement 3: the picture is the WHOLE channel, as a stand-in the same size as
+     the pane — never the live pane itself, whose snapshot the browser would stretch
+     past the cell once it has a transcript (spec §5.3, 2026-10-20). */
+  const image = transfer.written.dragImage
+  assert.equal(image.element.getAttribute('data-mixer-drag-ghost'), '')
+  assert.notEqual(image.element, pane, 'the live pane must not be the image element')
+  assert.equal(image.element.style.position, 'fixed')
+  assert.equal(image.element.style.width, '420px')
+  assert.equal(image.element.style.height, '880px')
+  /* It carries the real header rows, so the ghost still reads as this channel. */
+  assert.match(image.element.textContent, /一号会话/)
+  assert.match(image.element.textContent, /对话/)
+  assert.match(image.element.textContent, /轨迹/)
+  /* The offset keeps the ghost under the pointer (`setDragImage`'s x/y). */
+  assert.equal(image.x, 40)
+  assert.equal(image.y, 24)
   /* …and the source pane becomes a quiet placeholder in the meantime. */
   assert.equal(ui.$('[data-mixer-cell="s1"]').style.opacity, '0.4')
   assert.equal(ui.$('[data-mixer-cell="s1"]').getAttribute('data-mixer-dragging'), 'yes')
@@ -556,6 +574,29 @@ test('interaction: a channel head drags with the sidebar\'s own payload (§5.4b)
   act(() => { ui.$('[data-mixer-close="s1"]').dispatchEvent(fromButton) })
   assert.deepEqual(second.written, {}, 'a drag from the × must not become a channel move')
   assert.ok(fromButton.defaultPrevented)
+})
+
+test('interaction: the drag stand-in is withdrawn on the next task (§5.3)', async () => {
+  const ui = await mountTwo()
+  const { act, window } = ui
+  const pane = ui.$('[data-mixer-pane="s1"]')
+  pane.getBoundingClientRect = () => ({
+    left: 0, width: 400, right: 400, top: 0, bottom: 900, height: 900, x: 0, y: 0,
+  })
+  const head = () => ui.$$('[data-mixer-head]')[0]
+  act(() => { head().dispatchEvent(dragEvent(window, 'dragstart', fakeDataTransfer(null))) })
+  const ghost = ui.document.querySelector('[data-mixer-drag-ghost]')
+  assert.ok(ghost !== null, 'the image element must be in the document when setDragImage sees it')
+  /* Laid out (so it has a layout box to snapshot) but out of sight. */
+  assert.equal(ghost.style.left, '-10000px')
+  /* A second drag replaces the stand-in instead of stacking them up. */
+  act(() => { head().dispatchEvent(dragEvent(window, 'dragstart', fakeDataTransfer(null))) })
+  assert.equal(ui.document.querySelectorAll('[data-mixer-drag-ghost]').length, 1)
+  /* The browser snapshots synchronously after dragstart, so the next task may drop it. */
+  await new Promise(resolve => setTimeout(resolve, 0))
+  assert.equal(ui.document.querySelector('[data-mixer-drag-ghost]'), null)
+  /* The stand-in never touched the live pane: its body is still mounted. */
+  assert.ok(pane.querySelector('[data-mixer-body]') !== null)
 })
 
 test('interaction: dropping on the track reorders the board (§5.4b)', async () => {
