@@ -1047,11 +1047,17 @@ window.__ModuleLoader__.load({
      * a cell (reported in the browser 2026-10-20). `overflow: hidden` cannot fix
      * that: it clips paint, not layout boxes.
      *
-     * So the picture is a stand-in of the same box: the two real header rows cloned
-     * verbatim (React writes both as inline styles, so a clone renders identically)
-     * over an empty body, plus a hairline so it reads as a surface while it floats.
-     * The transcript is the one thing it cannot carry: HTML5 has no "snapshot only
-     * the visible part" (spec §5.3).
+     * So the picture is a stand-in of the same box, assembled from parts the browser
+     * can snapshot inside the cell:
+     *   - the two real header rows, cloned verbatim (React writes both as inline
+     *     styles, so a clone renders identically),
+     *   - the body: the LIVE body cloned when nothing in it is laid out outside the
+     *     channel (so a hero channel keeps its logo and composer, and a short
+     *     conversation keeps its messages), and a transcript skeleton when something
+     *     is — that overflowing content is exactly what breaks the snapshot,
+     *   - a hairline so it reads as a surface while it floats.
+     * HTML5 still has no "snapshot only the visible part", so for a long channel the
+     * ghost says "there is a transcript here" instead of showing it (spec §5.3).
      *
      * It has to be in the document (a detached element has no layout object, and the
      * snapshot then silently falls back to the default head image), but it is put
@@ -1083,7 +1089,18 @@ window.__ModuleLoader__.load({
       ghost.appendChild(head.cloneNode(true))
       const tabs = pane.querySelector('[data-mixer-view-tabs]')
       if (tabs !== null) ghost.appendChild(tabs.cloneNode(true))
-      ghost.appendChild(doc.createElement('div')).style.flex = '1 auto'
+      const realBody = pane.querySelector('[data-mixer-body]')
+      if (realBody !== null && bodyFitsCell(realBody)) {
+        const clonedBody = realBody.cloneNode(true)
+        clonedBody.removeAttribute('data-mixer-body')
+        /* The host's width handles are hover-only chrome (and can sit a few px outside
+           the body); the picture does not need them and they would make it wider than
+           the channel. */
+        for (const handle of clonedBody.querySelectorAll('[data-width-handle]')) handle.remove()
+        ghost.appendChild(clonedBody)
+      } else {
+        ghost.appendChild(buildDragSkeleton(doc))
+      }
       /* Strip the hooks the view and the tests navigate by, so the stand-in cannot be
          mistaken for a live pane during the one task it exists. */
       for (const node of ghost.querySelectorAll(
@@ -1097,12 +1114,79 @@ window.__ModuleLoader__.load({
       return ghost
     }
 
+    /**
+     * Would the browser's snapshot of this channel stay inside the channel?
+     *
+     * Blink unions the dragged element with EVERY descendant's layout box (see
+     * buildDragGhost), so one descendant laid out outside the body is already too much —
+     * that is the exact predicate for "the live body may be cloned into the ghost".
+     * The walk bails on the first offender, which for a transcript that overflows below
+     * the fold happens after a handful of visible messages.
+     */
+    function bodyFitsCell(body) {
+      const rect = body.getBoundingClientRect()
+      /* No box at all (nothing rendered / the read is impossible): do not clone. */
+      if (!(rect.width > 0) || !(rect.height > 0)) return false
+      /* A few px of overhang is chrome, not content: the host's width handles live
+         slightly outside the body, and losing a couple of px is invisible. Hundreds of
+         px (a transcript, a wide code block) is what makes the image stop being a cell,
+         and thousands is what the browser clamps at. */
+      const slack = 24
+      for (const node of body.querySelectorAll('*')) {
+        const box = node.getBoundingClientRect()
+        /* display:none and empty wrappers have no box; they cannot stretch the image. */
+        if (box.width <= 0 && box.height <= 0) continue
+        if (box.right > rect.right + slack || box.bottom > rect.bottom + slack) return false
+        if (box.left < rect.left - slack || box.top < rect.top - slack) return false
+      }
+      return true
+    }
+
+    /**
+     * The stand-in body for a channel whose transcript cannot be snapshotted (see
+     * buildDragGhost): message-shaped bars plus the composer's silhouette, both host
+     * tokens. Static on purpose — a drag image is one frame, so a pulsing skeleton
+     * would promise motion it will never have.
+     */
+    function buildDragSkeleton(doc) {
+      const bar = (width, edge) => {
+        const node = doc.createElement('div')
+        Object.assign(node.style, {
+          flex: '0 0 9px', width: `${width}%`, alignSelf: edge,
+          borderRadius: `${PILL}px`, background: T.l1,
+        })
+        return node
+      }
+      const body = doc.createElement('div')
+      Object.assign(body.style, {
+        flex: '1 1 auto', minHeight: 0, display: 'flex', flexDirection: 'column',
+        gap: '9px', padding: '16px 18px', overflow: 'hidden', background: T.base,
+      })
+      body.setAttribute('data-mixer-drag-skeleton', '')
+      for (const [width, edge] of [[62, 'flex-start'], [78, 'flex-end'], [46, 'flex-start'], [68, 'flex-end']]) {
+        body.appendChild(bar(width, edge))
+      }
+      const spacer = doc.createElement('div')
+      spacer.style.flex = '1 1 auto'
+      body.appendChild(spacer)
+      const composer = doc.createElement('div')
+      Object.assign(composer.style, {
+        flex: '0 0 auto', padding: '14px', border: `1px solid ${T.b1}`,
+        borderRadius: 'var(--dsw-radius-panel)',
+      })
+      composer.appendChild(bar(46, 'flex-start'))
+      body.appendChild(composer)
+      return body
+    }
+
     function Pane(props) {
       const {
         sessionId, summary, summaries, waitingKind, views, state,
         onClose, onDragStateChange, renderFactorySlot,
       } = props
       const isWaiting = waitingKind !== undefined
+      /* Empty channels render in the host's own hero phase (requirement 1). */
+      const hero = heroFor(summary)
       /* null = follow the Session's own stored view. A string pins the view by
          re-rendering the strict body with it, which is the plugin-side substitute
          for writing another entry's conversation store. */
@@ -1226,7 +1310,7 @@ window.__ModuleLoader__.load({
         },
           h(RealConversation, {
             renderFactorySlot,
-            hero: heroFor(summary),
+            hero,
             viewsComponent: pinnedView === null ? undefined : viewsComponent,
           }),
         ),
@@ -1776,9 +1860,13 @@ window.__ModuleLoader__.load({
           + '[data-mixer-pane] [class*="_slot"]>[class*="_frame"]{display:block}}'),
         /* Empty-channel optical lift (round 3). Scoped to our panes and to the hero
            phase, on the host's own stable hook for the composer seat; margin-bottom is
-           what moves a flex-centred item up without a transform (see HERO_LIFT_PX). */
+           what moves a flex-centred item up without a transform (see HERO_LIFT_PX).
+           The drag ghost clones a hero channel's real body, so it needs the same lift —
+           otherwise the picture of an empty channel would sit a half step lower than
+           the channel it stands for (spec §5.3). */
         h('style', { key: 'mixer-hero-lift' },
-          `[data-mixer-pane] [data-content-phase="hero"] [data-composer-seat]{`
+          '[data-mixer-pane] [data-content-phase="hero"] [data-composer-seat],'
+          + '[data-mixer-drag-ghost] [data-content-phase="hero"] [data-composer-seat]{'
           + `margin-bottom:${HERO_LIFT_PX}px}`),
         h(TopBar, {
           channels: visible,

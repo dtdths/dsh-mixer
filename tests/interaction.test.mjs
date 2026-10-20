@@ -44,6 +44,18 @@ function dragEvent(window, type, dataTransfer, extra = {}) {
   return event
 }
 
+/**
+ * jsdom reports no layout, so hand a channel's body a real box: the drag ghost only
+ * clones the live body when nothing inside it is laid out outside the channel (§5.3).
+ */
+function stubBody(pane, { width = 400, height = 900 } = {}) {
+  const body = pane.querySelector('[data-mixer-body]')
+  body.getBoundingClientRect = () => ({
+    left: 0, top: 0, width, height, right: width, bottom: height, x: 0, y: 0,
+  })
+  return body
+}
+
 /** A dataTransfer stand-in that records what the plugin writes. */
 function fakeDataTransfer(payload) {
   const written = {}
@@ -535,6 +547,15 @@ test('interaction: a channel head drags with the sidebar\'s own payload (§5.4b)
   pane.getBoundingClientRect = () => ({
     left: 100, width: 420, right: 520, top: 0, bottom: 880, height: 880, x: 100, y: 0,
   })
+  const body = stubBody(pane, { width: 420, height: 880 })
+  /* The host's width handles are hover-only chrome that may sit a few px outside the
+     body: they must not force a skeleton, and they must not ride into the picture. */
+  const widthHandle = ui.document.createElement('div')
+  widthHandle.setAttribute('data-width-handle', 'left')
+  widthHandle.getBoundingClientRect = () => ({
+    left: -8, top: 0, width: 0, height: 880, right: -8, bottom: 880, x: -8, y: 0,
+  })
+  body.appendChild(widthHandle)
   const head = ui.$$('[data-mixer-head]')[0]
   const transfer = fakeDataTransfer(null)
   const start = dragEvent(window, 'dragstart', transfer, { clientX: 140, clientY: 24 })
@@ -557,6 +578,12 @@ test('interaction: a channel head drags with the sidebar\'s own payload (§5.4b)
   /* The offset keeps the ghost under the pointer (`setDragImage`'s x/y). */
   assert.equal(image.x, 40)
   assert.equal(image.y, 24)
+  /* Its transcript fits the scroller, so the ghost carries the real body (composer
+     and all): only overflowing content has to be replaced by a skeleton. */
+  assert.ok(image.element.querySelector('[data-factory="conversation.content"]') !== null)
+  assert.ok(image.element.querySelector('[data-composer]') !== null)
+  assert.equal(image.element.querySelector('[data-mixer-drag-skeleton]'), null)
+  assert.equal(image.element.querySelector('[data-width-handle]'), null)
   /* …and the source pane becomes a quiet placeholder in the meantime. */
   assert.equal(ui.$('[data-mixer-cell="s1"]').style.opacity, '0.4')
   assert.equal(ui.$('[data-mixer-cell="s1"]').getAttribute('data-mixer-dragging'), 'yes')
@@ -597,6 +624,67 @@ test('interaction: the drag stand-in is withdrawn on the next task (§5.3)', asy
   assert.equal(ui.document.querySelector('[data-mixer-drag-ghost]'), null)
   /* The stand-in never touched the live pane: its body is still mounted. */
   assert.ok(pane.querySelector('[data-mixer-body]') !== null)
+})
+
+test('interaction: an empty channel\'s ghost keeps its hero and composer (§5.3)', async () => {
+  const ui = await loadInteractive()
+  const blankList = {
+    ids: ['b1'],
+    byId: {
+      b1: { id: 'b1', displayTitle: '（空白）', blank: true, running: false, parentId: undefined, cwd: '/repo' },
+    },
+    phase: 'ready',
+    projectionsBySession: {},
+  }
+  ui.draw({
+    board: { channels: ['b1'], weights: {} },
+    list: blankList,
+    status: new Map(),
+    workspaces: {
+      items: [{ workspaceId: 'w1', title: '主工作区', path: '/repo', sessionIds: ['b1'] }],
+      archivedSessionIds: [],
+    },
+  })
+  const { act, window } = ui
+  const pane = ui.$('[data-mixer-pane="b1"]')
+  pane.getBoundingClientRect = () => ({
+    left: 0, width: 400, right: 400, top: 0, bottom: 900, height: 900, x: 0, y: 0,
+  })
+  stubBody(pane)
+  const transfer = fakeDataTransfer(null)
+  act(() => { ui.$$('[data-mixer-head]')[0].dispatchEvent(dragEvent(window, 'dragstart', transfer)) })
+  const image = transfer.written.dragImage.element
+  /* Requirement 1 of round 8: an empty channel's ghost shows what the empty channel
+     shows — the host's hero phase (logo/workspace row) plus the composer — because
+     none of it overflows, so the browser can snapshot it inside the cell. */
+  assert.equal(image.querySelector('[data-factory]').getAttribute('data-hero'), 'yes')
+  assert.ok(image.querySelector('[data-composer]') !== null)
+  assert.equal(image.querySelector('[data-mixer-drag-skeleton]'), null)
+})
+
+test('interaction: a transcript too tall to snapshot becomes a skeleton (§5.3)', async () => {
+  const ui = await mountTwo()
+  const { act, window } = ui
+  const pane = ui.$('[data-mixer-pane="s1"]')
+  pane.getBoundingClientRect = () => ({
+    left: 0, width: 400, right: 400, top: 0, bottom: 900, height: 900, x: 0, y: 0,
+  })
+  /* jsdom reports no layout: one descendant laid out below the channel is exactly the
+     condition the browser cannot snapshot (spec §5.3). */
+  const body = stubBody(pane)
+  const transcript = body.querySelector('[data-factory]')
+  transcript.getBoundingClientRect = () => ({
+    left: 0, top: 880, width: 380, height: 1200, right: 380, bottom: 2080, x: 0, y: 880,
+  })
+  const transfer = fakeDataTransfer(null)
+  act(() => { ui.$$('[data-mixer-head]')[0].dispatchEvent(dragEvent(window, 'dragstart', transfer)) })
+  const image = transfer.written.dragImage.element
+  /* Requirement 2 of round 8: the body says "there is a transcript here" with bars
+     instead of going blank, and the overflowing live content is NOT cloned in. */
+  assert.ok(image.querySelector('[data-mixer-drag-skeleton]') !== null)
+  assert.equal(image.querySelector('[data-factory]'), null)
+  /* The header is still the real one, so the ghost reads as this channel. */
+  assert.match(image.textContent, /一号会话/)
 })
 
 test('interaction: dropping on the track reorders the board (§5.4b)', async () => {

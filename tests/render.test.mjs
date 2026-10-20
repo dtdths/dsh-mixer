@@ -81,7 +81,10 @@ test('render: an empty channel is handed the host hero phase, a live one stays d
      with a margin (never a transform — that would become the containing block for the
      host's fixed pickers), scoped to our panes and to the hero phase only. The exact
      value is a tunable constant, so only the shape is pinned here. */
-  assert.match(html, /\[data-mixer-pane\] \[data-content-phase=&quot;hero&quot;\] \[data-composer-seat\]\{margin-bottom:\d+px\}/)
+  assert.match(
+    html,
+    /\[data-mixer-pane\] \[data-content-phase=&quot;hero&quot;\] \[data-composer-seat\],\[data-mixer-drag-ghost\] \[data-content-phase=&quot;hero&quot;\] \[data-composer-seat\]\{margin-bottom:\d+px\}/,
+  )
   assert.doesNotMatch(html, /translateY\(/)
 })
 

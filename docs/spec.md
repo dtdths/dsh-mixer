@@ -159,7 +159,7 @@ renderFactorySlot('conversation.content', { variant: 'embedded', phase, hero }, 
 - 判定缝 `heroFor(summary)` 返回 `{ phase, hero }`，判据**照抄宿主**，不另造语义。
 - 边界（诚实记录）：宿主还看会话快照的 `openState` / `awaitingFirstTurn`；插件只拿得到列表摘要的 `blank`，故 `hero` 用 `blank === true` 近似。差异只可能在"正在重放、hero/docked 未定"的那一瞬：**摘要已经是 blank 时**插件会先画 hero，而宿主此刻在隐藏 composer（对 blank 会话两者最终一致）；**摘要还没有这一行时**插件按 `active` 处理（`heroFor(undefined)`），宁可先给停靠条也不闪一下 hero。
 - 380px 窄格里 hero 的品牌标 + 标题是否太吵，看过真机再决定要不要降级成"只居中 composer"。
-- **光学位置再抬一点**（2026-10-15 第三轮，用户反馈「虽居中但整体观感偏下」）：空会话的 hero 栈在宿主几何中心之上再抬 `HERO_LIFT_PX = 48` 的一半，即 24px。实现是一条**注入的作用域规则**给宿主稳定的 `[data-composer-seat]` 加 `margin-bottom: 48px` —— 宿主用 flex 居中，底边距把这一项往上推半个值，且**不动布局数学**；**绝不能用 `transform`**：那会让这个盒子成为宿主那些 `position:fixed` 拾取器的包含块（`ConversationRoot.module.css` 明确写了这条）。规则只在 `[data-mixer-pane]` + `[data-content-phase="hero"]` 下生效；值是一个常量，观感不合适直接改它。
+- **光学位置再抬一点**（2026-10-15 第三轮，用户反馈「虽居中但整体观感偏下」）：空会话的 hero 栈在宿主几何中心之上再抬 `HERO_LIFT_PX = 48` 的一半，即 24px。实现是一条**注入的作用域规则**给宿主稳定的 `[data-composer-seat]` 加 `margin-bottom: 48px` —— 宿主用 flex 居中，底边距把这一项往上推半个值，且**不动布局数学**；**绝不能用 `transform`**：那会让这个盒子成为宿主那些 `position:fixed` 拾取器的包含块（`ConversationRoot.module.css` 明确写了这条）。规则只在 `[data-mixer-pane]`（以及拖拽替身 `[data-mixer-drag-ghost]`，它克隆 hero 身体，需要同一抬升）+ `[data-content-phase="hero"]` 下生效；值是一个常量，观感不合适直接改它。
 
 - **共享工厂**：`conversation.content` 是宿主为多宿主复用准备的工厂，可直接在每格实例化。
 - `options.slots.views` 是**局部组件缝**：它的 `renderSlot` 绑定的是**工厂的子槽**，所以只能渲染 `conversation.session`（官方默认实现 `ConversationSessionView` 就是这么做）。**渲染 `conversation.view` 会抛错**（未声明键）→ 整棵工厂子树被卸载，表现为整格空白。
@@ -258,8 +258,11 @@ renderFactorySlot('conversation.content', input, { slots: { views: Views } })
 - **拖动头部排序**：通道头部 `draggable`，拖动即重排。从头部自带的控件（标签、`×`）起拖必须拒绝（`event.target.closest('button')`），否则点按钮会变成拖拽。
 - **拖拽虚影＝整通道**（用户 2026-10-15 决定，需求3；**2026-10-20 修正实现**）：
   - **不能把活着的通道元素交给 `setDragImage`**（原实现如此，事后证明只在空会话上成立）。Blink 的快照范围是 `AbsoluteBoundingBoxRectIncludingDescendants()` —— 元素**加全部后代布局盒**的并集，再夹到 `kMaxDimension = 8192px`；hero 相的通道没有溢出内容，并集就是通道本身，所以看上去正常；**有对话的通道**里，滚动区后代的布局盒在几千像素之外，并集被撑到上限，画出来就不再是一个通道（用户实测原话：「只有空对话才有整格虚影，有对话的子栏拖动无虚影」）。`overflow: hidden`、滚动高度、`clip-path` 都救不了：它们只影响绘制，不改布局盒。
-  - **现行做法**：`onDragStart` 里同步造一个**同尺寸替身**（`buildDragGhost`）—— `position: fixed` + `left: -10000px`（**必须已入文档**：游离元素没有布局盒，快照会静默退回默认头部图），宽高取通道的 `getBoundingClientRect()`，内容是**真实头两行的 `cloneNode(true)`**（React 把这两行写成内联样式，克隆出来一模一样）＋ 空身体 ＋ 1px `border-l2`，并剥掉 `data-mixer-head` / `close` / `view*` 钩子；然后 `setDragImage(ghost, offsetX, offsetY)`，偏移仍是**指针在通道内的相对位置**。快照在 dragstart 处理函数返回后**同步**完成（`DragController::StartDrag`），所以替身在下一个 task 移除（`data-mixer-drag-ghost` 是它的 devtools 钩子）。
-  - 代价（HTML5 硬限制）：虚影里**不含对话正文**，只有真实头部与通道尺寸；也不跟手、不能加动效。要"跟手 + 缩放/阴影/正文"只能放弃 HTML5 drag image 改自绘代理 —— 那会让"从侧栏拖入"与本路径观感分叉，**本期不做**。
+  - **现行做法**：`onDragStart` 里同步造一个**同尺寸替身**（`buildDragGhost`）—— `position: fixed` + `left: -10000px`（**必须已入文档**：游离元素没有布局盒，快照会静默退回默认头部图），宽高取通道的 `getBoundingClientRect()`，1px `border-l2`，并剥掉 `data-mixer-head` / `close` / `view*` 钩子；然后 `setDragImage(ghost, offsetX, offsetY)`，偏移仍是**指针在通道内的相对位置**。快照在 dragstart 处理函数返回后**同步**完成（`DragController::StartDrag`），所以替身在下一个 task 移除（`data-mixer-drag-ghost` 是它的 devtools 钩子）。
+  - **替身的内容分两段取**（2026-10-20 第八轮，用户要求"空会话保留输入框和 logo、超长通道给骨架"）：
+    - **头部两行**（头部行 + 视图标签）永远**真实 `cloneNode(true)`** —— React 把这两行写成内联样式，克隆出来一模一样。
+    - **身体**走探针 `bodyFitsCell(body)`：遍历 `[data-mixer-body]` 的后代，只要有一个后代的 `getBoundingClientRect()` 落在通道之外（这就是 Blink 那个并集的判据）就不克隆。**全部在框内 → 克隆真实身体**：空会话因此天然保留 hero（logo + 工作区行）与输入框，短对话保留自己的正文；**有越界 → 画骨架** `buildDragSkeleton`（几条 `bg-layer-1` 的胶囊消息条 + 一个 composer 轮廓，`data-mixer-drag-skeleton`），因为越界的内容正是毁掉快照的东西。探针在第一个越界后代处提前返回，长对话的代价只是"可见的那几条"；并留 **24px 余量**（宿主的宽度抓手是悬停才可见的 chrome、可能越界几个像素，不该逼出骨架；克隆时这些 `[data-width-handle]` 会从替身里删掉，所以画面仍是精确的通道尺寸）。
+  - 代价（HTML5 硬限制）：**长对话的虚影不含正文**（只有骨架 + 真实头部），也不跟手、不能加动效。要"跟手 + 缩放/阴影/正文"只能放弃 HTML5 drag image 改自绘代理 —— 那会让"从侧栏拖入"与本路径观感分叉，**本期不做**。
   - 同一处给原通道打 `data-mixer-dragging="yes"` → `opacity: .4` 做原位占位；**`dragend` 必须清理**（含拖出窗口、按 Esc 取消这些不触发 `drop` 的路径）。
 - **从左侧栏拖入**：拖一个会话行到通道区，按落点插入对应位置。侧栏展开时才可用（调音台会折叠它，需手动展开）。这条拖拽由**宿主**发起，虚影仍是浏览器默认（一整行会话）—— 观感差异接受，写在此处以免被当 bug。
 - **放置指示 + 让位**（用户 2026-10-15 决定，Q12=b）：拖动经过时，其它通道**实时平移让出与虚影等宽的空槽**，插入位在空槽左缘画 2px 的 `state-business-primary` 竖线。devtools 可读的钩子：源格 `data-mixer-dragging="yes"`、落点元素 `data-mixer-drop-indicator` 且 `data-mixer-drop-slot="yes|no"`（`no` = 侧栏拖入的 2px 细线）。
@@ -311,7 +314,7 @@ e.dataTransfer.setData('text/plain', node.id)   // node.id 就是 SessionId
 
 ## 6. 验证清单（装完怎么确认生效）
 
-0. **先跑自动化**：`npm run check`（语法 + **77 个用例**：纯函数缝 + 真 store 引擎 + 真 React（静态渲染与 jsdom 交互）+ 侧栏折叠 seam + 措辞对齐 + 宿主契约漂移哨兵 + 冷启动守卫）。这一条绿了再动浏览器 —— 它覆盖的是"冷启动会炸整页"和"注册事实静默丢失"这两类只有跑起来才看得见的问题。
+0. **先跑自动化**：`npm run check`（语法 + **79 个用例**：纯函数缝 + 真 store 引擎 + 真 React（静态渲染与 jsdom 交互）+ 侧栏折叠 seam + 措辞对齐 + 宿主契约漂移哨兵 + 冷启动守卫）。这一条绿了再动浏览器 —— 它覆盖的是"冷启动会炸整页"和"注册事实静默丢失"这两类只有跑起来才看得见的问题。
 1. **安装**：`plugin_manager` → `install_bundle`，target = **本包根目录**；确认返回 `application: applied` 且 `warnings` 为空。随后**把 `dsh-mixer-spike` 从 profile 卸掉**（否则原型与正式版同时注册 `main` 的 key、会话头按钮和 `/mixer`，行为不可预测）。
    **验收判据（profile 文件）**：`~/.dsh/profiles/web/package.json` 里应当只剩 `"dsh-mixer": "link:/Users/user/Documents/code/d/dsh-mixer"` 这一条 mixer 依赖，且 `dsh.profile.bundles` 里只列 `dsh-mixer`、**不含** `dsh-mixer-spike`（装之前那里写的是 spike）。
 2. **冷启动**（关键，别用热重载代替）：**硬刷新**页面，确认**没有** `Failed to load plugins` / `web boot: N entry did not activate`。任何 `apply()` 改动都必须重做这一步。
@@ -330,7 +333,7 @@ e.dataTransfer.setData('text/plain', node.id)   // node.id 就是 SessionId
 
 12. **空会话居中**（需求1）：新建一个还没说话的会话通道 → 输入框**竖居中**，上方是宿主的 hero 标题与工作区行；发出第一条消息后输入框**自动回到底部**停靠，不闪跳。
 13. **新建不离开调音台**（需求2）：从 `会话` 浮层底部新建、按 56px 轨道上的新建按钮、按 `Cmd/Ctrl+Alt+N` —— **三个入口都留在调音台**（含宿主**复用已有空白会话**那一路，§5.1），新会话成为**第 0 个通道**且光标在它的输入框里；`×` 移出的通道不因此弹回；每格滚动位置回顶属已知代价（§5.1）。
-14. **虚影与让位**（需求3，2026-10-20 修正后复验）：拖头部时虚影是**整个通道**（不是只有头部）—— **空会话与有对话的通道表现一致**（同尺寸、带真实头部与视图标签），但**不含对话正文**（HTML5 硬限制，§5.3）；原通道半透明；拖动经过时其它通道让出空槽；拖到窗口外或按 `Esc` 取消后，原通道透明度复原、不留空槽、DOM 里不残留 `[data-mixer-drag-ghost]`。
+14. **虚影与让位**（需求3，2026-10-20 第二轮修正后复验）：拖头部时虚影是**整个通道**（不是只有头部），同尺寸、带真实头部与视图标签；**身体**按通道内容分两种 —— **空会话**的虚影保留 hero（logo + 工作区行）与输入框（身体全在框内，直接克隆），**超长对话**的虚影身体是**骨架**（消息条 + composer 轮廓，`data-mixer-drag-skeleton`，不含正文，HTML5 硬限制见 §5.3）；原通道半透明；拖动经过时其它通道让出空槽；拖到窗口外或按 `Esc` 取消后，原通道透明度复原、不留空槽、DOM 里不残留 `[data-mixer-drag-ghost]`。
 15. **顶栏 B**（需求4）：顶栏只写 `调音台`，不出现具体工作区名；`会话` 浮层左列点一下只改「新建落点」且**不会离开调音台**；右列搜索即时过滤标题；`Esc` 与点外部都能关；勾选即增删通道。
 16. **空会话的光学位置**（第三轮）：新建的空白通道里，hero（logo + 输入框）看起来在**略高于几何中心**处，而不是「算居中但看着偏下」；不合适就调 `HERO_LIFT_PX` 一个数。
 17. **顶栏可读性**（第三轮）：`调音台`、`会话`、`常规视图` 与每格的视图标签都在 13px 档、一眼能读；`会话` 静止时就是一颗有底色有描边的按钮，不是一段文字。
@@ -451,6 +454,13 @@ agent 侧可复核的旁证（**只证明注册事实，不替代本清单的观
 | 1 | 「虚影视觉效果很奇怪：只有空对话才有整格虚影，有对话的子栏拖动无虚影」；**让位正常、拖动不会被取消** | **根因**：Blink 的拖影快照取的是「元素 + 全部后代布局盒」的并集（`AbsoluteBoundingBoxRectIncludingDescendants`，`layout_object.cc:2369`），再夹到 `kMaxDimension = 8192px`；hero 相不溢出 → 并集=通道本身；有对话的通道里滚动区后代的布局盒在几千像素外 → 并集触顶，画出来不再是一个通道。**推翻了 §9.0b 第 5 条的实现备注「`setDragImage` 传格根」** —— 那个做法只在空会话成立。`overflow: hidden` 只是绘制裁剪、不改布局盒，所以"临时关掉滚动"救不了。**修**：传**同尺寸离屏替身**（真实头两行 `cloneNode` + 空身体 + 1px `border-l2`），快照完成后下一个 task 移除；代价是虚影不含对话正文（HTML5 无"只截可见部分"） | §5.3 / §6.14 / §11 |
 | 2 | §6.16 hero 光学位置：「正好」 | 不改值，`HERO_LIFT_PX = 48` 定稿 | §4.4 / §6.16 |
 
+### 9.0e 2026-10-20 第八轮：虚影身体要"有内容"
+
+| # | 反馈（浏览器实测） | 处置 | 落点 |
+| --- | --- | --- | --- |
+| 1 | 「身体部分可以有内容子栏保持内容（如空对话保持输入框和 logo）」 | 身体改为**条件克隆**：探针 `bodyFitsCell` 遍历 `[data-mixer-body]` 的后代矩形（Blink 并集的同一条判据），**全部落在通道内就克隆真实身体** —— 空会话因此自带 hero（logo + 工作区行）与输入框，短对话自带正文。hero 抬升规则补上 `[data-mixer-drag-ghost]` 作用域，使克隆的 hero 与真实通道同高 | §5.3 / §4.4 / §6.14 |
+| 2 | 「超长的子栏身体可否增加骨架而不是置为空」 | 有后代越界 → `buildDragSkeleton`：`bg-layer-1` 胶囊消息条（左右交替）+ composer 轮廓（`data-mixer-drag-skeleton`）。静态、无动画 —— 拖影只有一帧，会"动"的骨架是撒谎。长对话的虚影因此是"有正文"的语义，而不是空白 | §5.3 / §6.14 |
+
 ### 9.1 仍开放
 
 - **钉住视图不写会话记忆**（§4.4 边界）：要"点了就记住"，需上游暴露 store 或 `selectView` 动作。
@@ -483,7 +493,7 @@ agent 侧可复核的旁证（**只证明注册事实，不替代本清单的观
 | `boot-check.mjs` | 冷启动守卫：真实 Cordis Context + 对照项，并断言 `main` 的 session 子槽与 board store |
 | `tests/seams.test.mjs` | `node --test` 覆盖 15 个纯函数缝 + 1 张文案表（21 个用例）；`client.js` 的返回值多挂一个 `__test` 字段把这些缝暴露给测试（宿主只读 `inject` / `apply`，其余键被忽略） |
 | `tests/render.test.mjs` | 用**宿主的真 React + react-dom/server** 把面板渲染成静态 HTML（10 个用例）：状态标记、面包屑、每格工厂内容、分栏把手、宽度落到 flex、空态、状态回落、**空会话必须拿到 hero 相位**、缺 store 的降级路径。纯函数测试看不见 React 层，靠这一层补 |
-| `tests/interaction.test.mjs` | 把面板挂进 **jsdom + react-dom/client**，用真事件驱动（24 个用例）：× 关闭后停靠并可从顶栏放回（且 retain 未释放）、`会话` 浮层勾选写 board 与本地标题过滤、左列只改"新建落点"且不导航、**新建走 `ctx.sessions.create` 并置顶 + 光标落在新格**、**刚新建完的主动离开不被抢回**、**复用同工作区空白会话**、**宿主入口的窄条件抢回（主动离开不抢）**、`Esc`/再点触发器/点浮层外三种关闭、**顶栏不出现工作区名而面板里出现**、**新建失败在顶栏可见**、**光标交接等迟到的 composer**、**触发器要有按钮样式**、**点左列工作区滚动右列**、**归档会话不在列表里**、**悬停出行尾归档且归档后该格关掉**、**正在执行先问一次再停止并归档**、**归档抛错/缺 API 都要出提示**、**归档进行中显示"归档中…"**、视图标签经工厂 seam 钉住 view、焦点标记、拖分界线（比例 + 380 夹紧 + 收尾）、头部拖动载荷（含**同尺寸替身虚影**：真实头部克隆、离屏、下一个 task 移除，与 `.4` 占位）与「从 × 起拖被拒」、轨道 drop 重排并拒收非会话负载、**拖动时同宽空槽（让位）** |
+| `tests/interaction.test.mjs` | 把面板挂进 **jsdom + react-dom/client**，用真事件驱动（26 个用例）：× 关闭后停靠并可从顶栏放回（且 retain 未释放）、`会话` 浮层勾选写 board 与本地标题过滤、左列只改"新建落点"且不导航、**新建走 `ctx.sessions.create` 并置顶 + 光标落在新格**、**刚新建完的主动离开不被抢回**、**复用同工作区空白会话**、**宿主入口的窄条件抢回（主动离开不抢）**、`Esc`/再点触发器/点浮层外三种关闭、**顶栏不出现工作区名而面板里出现**、**新建失败在顶栏可见**、**光标交接等迟到的 composer**、**触发器要有按钮样式**、**点左列工作区滚动右列**、**归档会话不在列表里**、**悬停出行尾归档且归档后该格关掉**、**正在执行先问一次再停止并归档**、**归档抛错/缺 API 都要出提示**、**归档进行中显示"归档中…"**、视图标签经工厂 seam 钉住 view、焦点标记、拖分界线（比例 + 380 夹紧 + 收尾）、头部拖动载荷（含**同尺寸替身虚影**：真实头部克隆、身体按 `bodyFitsCell` 克隆或骨架、离屏、下一个 task 移除，与 `.4` 占位）与「从 × 起拖被拒」、**空会话虚影保留 hero 与 composer**、**越界通道的虚影身体是骨架**、轨道 drop 重排并拒收非会话负载、**拖动时同宽空槽（让位）** |
 | `tests/store.test.mjs` | 用**宿主的真 store 引擎**跑持久化（5 个用例）：键名与 root 无后缀、坏数据逐字段兜底、第二个实例恢复、无 localStorage 时的可用性 |
 | `tests/sidebar.test.mjs` / `tests/labels.test.mjs` | 折叠幂等（5 个）与措辞对齐宿主字典（5 个） |
 | `tests/host-contract.test.mjs` | **宿主契约漂移哨兵**（6 个）：`external` 的名字仍在该 checkout 的平台静态表与 seed 表里、`inject` 每条边都指向真实存在的包、slot 注册仍提供 `store` 与 session 子槽座位、root store 仍以无 key 方式实例化、侧栏行状态的四个事实与三种 kind 仍在、轮次导航仍由容器查询隐藏。其中前两条是真检查（能真失败），其余是锚点检查（命中 = 机制还在，不等于行为不变） |
@@ -528,11 +538,12 @@ DSH_REPO=/新的/checkout 路径 npm run check
 
 另有三条行为常量，**只在文档与代码注释里约定、不进 `__test`**（它们不是判断，是时序参数，钉一个数字等于写同义反复）：`FOCUS_RETRY_FRAMES = 30`（光标交接等宿主 composer 出现的帧数上限，§5.1③）、`RECLAIM_WINDOW_MS = 2000`（抢回判据的时效窗，§5.1）与 `HERO_LIFT_PX = 48`（空会话 hero 的光学上调，§4.4）。
 
-后 4 条是 2026-10-15 第二轮新增（需求 1 / 2 / 4）。**用例数已落地**：v1 的 53 例 + 第二轮 15 例 = **68 例**全绿（`seams` +4、`render` +1、`interaction` +10）；第三轮再 +1（`interaction` 的「触发器要有按钮样」）；第四轮 +4（`seams` 的 `archiveActivityOf` + `interaction` 的归档过滤 / 悬停归档 / 停止并归档）；第五轮 +2（归档同步抛错 / 未提供 `archiveSession` 都要出提示，以及 `归档中…` 的进行中态）；第六轮 +1（`host-contract` 的 inject 名单哨兵）；第七轮 +1（`interaction` 的「替身虚影同尺寸/带真实头部/下一个 task 撤销」）= **77 例**。`tests/harness.mjs` 的假宿主已补齐 `ctx.sessions.create` 的记录、`sessions.list` / `layout.panelInfo` 两个可订阅源（含 `setList` / `setPanelInfo` 驱动），并且 `useStore` 改成真的订阅 + 版本号重渲染——原来只读快照，导致"面板自己的写入"在测试里根本不会触发重渲染，`×` 关闭那条用例是靠别的原因才过的。
+后 4 条是 2026-10-15 第二轮新增（需求 1 / 2 / 4）。**用例数已落地**：v1 的 53 例 + 第二轮 15 例 = **68 例**全绿（`seams` +4、`render` +1、`interaction` +10）；第三轮再 +1（`interaction` 的「触发器要有按钮样」）；第四轮 +4（`seams` 的 `archiveActivityOf` + `interaction` 的归档过滤 / 悬停归档 / 停止并归档）；第五轮 +2（归档同步抛错 / 未提供 `archiveSession` 都要出提示，以及 `归档中…` 的进行中态）；第六轮 +1（`host-contract` 的 inject 名单哨兵）；第七轮 +1（`interaction` 的「替身虚影同尺寸/带真实头部/下一个 task 撤销」）；第八轮 +2（`interaction` 的「空会话虚影保留 hero 与 composer」「越界通道的虚影身体是骨架」）= **79 例**。`tests/harness.mjs` 的假宿主已补齐 `ctx.sessions.create` 的记录、`sessions.list` / `layout.panelInfo` 两个可订阅源（含 `setList` / `setPanelInfo` 驱动），并且 `useStore` 改成真的订阅 + 版本号重渲染——原来只读快照，导致"面板自己的写入"在测试里根本不会触发重渲染，`×` 关闭那条用例是靠别的原因才过的。
 
 **验证**：`npm run check`（语法 + **53 个用例** + 冷启动）在本机全绿；**浏览器行为已由用户按 §6 十条在根包上验收通过**（2026-10-15，装根包 + 卸 `dsh-mixer-spike` + 硬刷新；见 §6 验收记录）。
 **第二轮（需求 1–4）实现后的验证**：`npm run check` = **76 个用例全绿** + 冷启动 `PASS`（2026-10-15）；**§6 第 12–20 条属观感项，由用户在浏览器里逐条验收** —— 尤其"整格虚影"与"让位"两处只有真拖拽能验。
 
 **第三至六轮（浏览器实测 → 修复）的验收记录（2026-10-15）**：用户在浏览器里逐轮实测并回报。**已确认可用**：§6.17 顶栏可读性、§6.18 浮层跳转、§6.19 归档过滤、§6.20 面板内归档（含"正在执行先问一次"）—— 最后一轮修掉了 `uiWorkspace` 缺失的**服务边**（见 §9.0c 第 6 行），用户复测「正常了」。
 
-**第七轮（2026-10-20，虚影根因 + 修法）**：`npm run check` = **77 个用例全绿** + 冷启动 `PASS`。用户已确认 §6.16（hero 光学位置「正好」，`HERO_LIFT_PX` 定稿 48）、以及 §6.14 的**让位**与**「拖动不会被取消」**；**虚影本身待用户按新实现复验**（有对话的通道现在也应拿到整通道尺寸的替身虚影，见 §5.3 / §9.0d）。
+**第七轮（2026-10-20，虚影根因 + 修法）**：`npm run check` = **77 个用例全绿** + 冷启动 `PASS`。用户已确认 §6.16（hero 光学位置「正好」，`HERO_LIFT_PX` 定稿 48）、以及 §6.14 的**让位**与**「拖动不会被取消」**；虚影按新实现复验通过（「现在虚影总体效果正常了」）。
+**第八轮（2026-10-20，虚影身体内容化）**：`npm run check` = **79 个用例全绿** + 冷启动 `PASS`。按 §9.0e 把替身身体改为「框内克隆 / 越界骨架」；**待用户复验** §6.14 的两种身体（空会话 = hero + 输入框；超长对话 = 骨架）。
