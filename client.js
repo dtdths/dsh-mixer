@@ -2402,11 +2402,18 @@ window.__ModuleLoader__.load({
 
            Outside the mixer every command `pass`es instead of swallowing the key, and
            inside it a missing channel is `blocked` with a reason (the host's own
-           vocabulary), never a silent no-op. */
-        const shortcutDefaults = (code) => ({
+           vocabulary), never a silent no-op.
+
+           `linuxCode` exists because the host validates every declared default for ALL
+           five profiles at registration, whichever device is running: Desktop Linux goes
+           through the browser keyboard adapter, where Ctrl+Alt+Arrow is reserved
+           (`bindingIssue`), so an arrow default there throws
+           `Reserved shortcut default: <id>` and fails the whole entry at cold boot.
+           Brackets keep the command bound on Linux instead of leaving it unassigned. */
+        const shortcutDefaults = (code, linuxCode = code) => ({
           'desktop:macos': { code, modifiers: ['primary', 'alt'] },
           'desktop:windows': { code, modifiers: ['primary', 'alt'] },
-          'desktop:linux': { code, modifiers: ['primary', 'alt'] },
+          'desktop:linux': { code: linuxCode, modifiers: ['primary', 'alt'] },
           'web:macos': { code, modifiers: ['primary', 'alt'] },
           'web:windows': { code, modifiers: ['primary', 'alt'] },
         })
@@ -2435,15 +2442,15 @@ window.__ModuleLoader__.load({
           if (mixerRuntime.ids.length === 0) return { status: 'blocked', reason: '调音台里还没有通道' }
           return { status: 'handled', run: () => mixerRuntime.step(delta) }
         }
-        for (const [id, label, aliases, code, delta] of [
-          ['mixer.channel.next', '跳到下一个通道', ['next channel', '下一个通道'], 'ArrowRight', 1],
-          ['mixer.channel.prev', '跳到上一个通道', ['previous channel', '上一个通道'], 'ArrowLeft', -1],
+        for (const [id, label, aliases, code, linuxCode, delta] of [
+          ['mixer.channel.next', '跳到下一个通道', ['next channel', '下一个通道'], 'ArrowRight', 'BracketRight', 1],
+          ['mixer.channel.prev', '跳到上一个通道', ['previous channel', '上一个通道'], 'ArrowLeft', 'BracketLeft', -1],
         ]) {
           ctx.effect(() => ctx.shortcuts.register({
             id,
             label: () => label,
             aliases,
-            defaults: shortcutDefaults(code),
+            defaults: shortcutDefaults(code, linuxCode),
             regions: ['page', 'editable'],
             modals: [],
             resolve: stepChannel(delta),

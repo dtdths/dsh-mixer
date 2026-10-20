@@ -21,7 +21,8 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { readFileSync, existsSync } from 'node:fs'
 import { createRequire } from 'node:module'
-import { loadPlugin } from './harness.mjs'
+import { pathToFileURL } from 'node:url'
+import { createHost, loadPlugin } from './harness.mjs'
 
 const DSH_REPO = process.env.DSH_REPO ?? '/Users/user/Documents/code/deepseek-harness'
 const require = createRequire(import.meta.url)
@@ -196,4 +197,58 @@ test('host contract: the shortcut registry we bind channel jumps with still look
   assert.match(types, /export type ShortcutRegion = 'page' \| 'editable' \| 'terminal'/,
     'the regions we register for moved')
   assert.match(types, /readonly modals: readonly string\[\]/, 'the modals field moved')
+})
+
+test('host contract: the host registry accepts every shortcut default we register', async (t) => {
+  /* The 2026-10-20 boot failure this pins: `primary+alt+ArrowRight` is reserved on
+     Desktop Linux, and `ShortcutRegistry.register` validates every declared default for
+     ALL five profiles regardless of the device in use — so it threw
+     `Reserved shortcut default: mixer.channel.next` and the whole entry went FAILED
+     (`web boot: 1 entry did not activate`). The fake registry in `tests/harness.mjs`
+     accepts anything, so only the host's own rules can catch this. They are executed
+     from the checkout (Node >= 22.18 strips the types); older Node skips. */
+  const source = `${DSH_REPO}/packages/client/shortcuts/src`
+  let rules
+  try {
+    rules = {
+      ...(await import(pathToFileURL(`${source}/binding.ts`).href)),
+      ...(await import(pathToFileURL(`${source}/configuration.ts`).href)),
+    }
+  } catch (error) {
+    if (error.code === 'ERR_UNKNOWN_FILE_EXTENSION' || error.code === 'ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX') {
+      t.skip(`this Node cannot import the host's TypeScript sources (${error.code})`)
+      return
+    }
+    throw error
+  }
+
+  const { definition } = await loadPlugin()
+  const { shortcutCommands } = createHost(definition)
+  const profiles = [
+    ['desktop', 'macos'], ['desktop', 'windows'], ['desktop', 'linux'],
+    ['web', 'macos'], ['web', 'windows'],
+  ]
+  assert.equal(shortcutCommands.length, 11, 'cold boot must register all 11 channel jumps')
+
+  for (const [runtime, platform] of profiles) {
+    const accepted = []
+    for (const command of shortcutCommands) {
+      const declared = rules.resolveShortcutDefault(command, runtime, platform)
+      if (declared === undefined) continue
+      const label = `${command.id} = ${declared.code} on ${runtime}:${platform}`
+      const binding = rules.normalizeBinding(declared, platform)
+      if (runtime === 'web') {
+        assert.ok(rules.isWebBindingAllowed(binding, platform),
+          `${label}: the host throws \`Unsupported Web shortcut\` at registration`)
+      }
+      assert.equal(rules.bindingIssue(binding, runtime, platform), null,
+        `${label}: the host throws \`Reserved shortcut default\` at registration, failing the entry at cold boot`)
+      /* register() also rejects two of OUR commands sharing one combination. */
+      for (const other of accepted) {
+        assert.ok(!rules.overlappingBindings(binding, other.binding),
+          `${label} collides with ${other.command.id} on ${runtime}:${platform}`)
+      }
+      accepted.push({ command, binding })
+    }
+  }
 })

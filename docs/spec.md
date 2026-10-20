@@ -322,15 +322,17 @@ e.dataTransfer.setData('text/plain', node.id)   // node.id 就是 SessionId
 
 - **注册**：`ctx.effect(() => ctx.shortcuts.register({...}), 'mixer: shortcut …')`，共 11 条命令 —— `mixer.channel.1` … `mixer.channel.9`（跳第 N 个通道）与 `mixer.channel.next` / `mixer.channel.prev`（上/下一个）。走宿主注册表换来三件事：出现在 DSH 的**快捷键设置**里、用户**可改键**、宿主负责与 composer / 其它插件的**冲突仲裁**。
 - **默认键位**：`primary+alt+Digit1..9` 与 `primary+alt+ArrowRight/ArrowLeft`。`primary+alt` 是宿主自己给"不撞文本编辑"的组合用的（如 `session.new`）。
+  **Desktop Linux 的 `next` / `prev` 是 `primary+alt+BracketRight/BracketLeft`**（2026-10-20 修）：宿主的 `bindingIssue` 把 `Ctrl+Alt+方向键` 在 Linux+Desktop 下判为 `reserved`（那里的键盘适配器就是浏览器那条，方向键归窗口管理器），而 `register()` **不分设备**地校验全部五个 profile 的默认键位 —— 声明一个方向键默认值就会抛 `Reserved shortcut default: <id>`，整个条目在冷启动时 FAILED。Linux 上换成方括号，是为了让命令**仍有默认可按**，而不是留成未绑定的空行。
 - **区域**：`regions: ['page', 'editable']` —— 光标在某个通道的输入框里时也能跳（那正是调音台用户的常态）；`modals: []`。
 - **行为**：跳转 = 把目标通道**滚动到可见**（`scrollIntoView({ block: 'nearest', inline: 'nearest' })`）并把焦点交到它的输入框（复用 §5.1③ 的焦点交接机制，含迟到的 composer）。`next`/`prev` 从**当前焦点所在通道**出发并**首尾环绕**；焦点不在任何通道时从第一个（next）/最后一个（prev）开始。
 - **不用时不吞键**：调音台不是当前面板 → `resolve` 返回 `pass`（不消费按键）；调音台在、但没有第 N 个通道 → `blocked` + 原因（宿主的词汇，不是静默无效）。
 - **跨作用域的桥**：快捷键在 `apply` 作用域注册（随插件一次），但它要作用于 React 状态（哪些通道、焦点在哪）。面板每次渲染 publish 一个 `mixerRuntime`（`ids` / `focus` / `step`），卸载即清空 —— 键击永远不会作用在过期列表上（与 `createdSessions` 同族的握手）。
 - ⚠️ **服务边**：`inject` 增加 `'shortcuts'`，`package.json` 的加载顺序边同步加 `@deepseek-ai/dsh-client-shortcuts`；`boot-check.mjs` 的假 context 必须 `provide('shortcuts')`，并断言 11 条命令都在冷启动时注册成功（缺一条 = 静默少一个快捷键）。
+- ⚠️ **假注册表挡不住宿主的校验**：`boot-check.mjs` / `tests/harness.mjs` 的 `register` 收什么都收，所以"11 条都注册了"并不等于"宿主会接受它们"。真判据在 `tests/host-contract.test.mjs` 的 `host registry accepts every shortcut default we register`：从 checkout 里跑宿主自己的 `bindingIssue` / `isWebBindingAllowed` / `resolveShortcutDefault` / `overlappingBindings`，逐个 profile 验证插件的每条默认键位（含我们自己命令之间的撞键）。
 
 ## 6. 验证清单（装完怎么确认生效）
 
-0. **先跑自动化**：`npm run check`（语法 + **86 个用例**：纯函数缝 + 真 store 引擎 + 真 React（静态渲染与 jsdom 交互）+ 侧栏折叠 seam + 措辞对齐 + 宿主契约漂移哨兵 + 冷启动守卫）。这一条绿了再动浏览器 —— 它覆盖的是"冷启动会炸整页"和"注册事实静默丢失"这两类只有跑起来才看得见的问题。
+0. **先跑自动化**：`npm run check`（语法 + **87 个用例**：纯函数缝 + 真 store 引擎 + 真 React（静态渲染与 jsdom 交互）+ 侧栏折叠 seam + 措辞对齐 + 宿主契约漂移哨兵 + 冷启动守卫）。这一条绿了再动浏览器 —— 它覆盖的是"冷启动会炸整页"和"注册事实静默丢失"这两类只有跑起来才看得见的问题。
 1. **安装**：`plugin_manager` → `install_bundle`，target = **本包根目录**；确认返回 `application: applied` 且 `warnings` 为空。随后**把 `dsh-mixer-spike` 从 profile 卸掉**（否则原型与正式版同时注册 `main` 的 key、会话头按钮和 `/mixer`，行为不可预测）。
    **验收判据（profile 文件）**：`~/.dsh/profiles/web/package.json` 里应当只剩 `"dsh-mixer": "link:/Users/user/Documents/code/d/dsh-mixer"` 这一条 mixer 依赖，且 `dsh.profile.bundles` 里只列 `dsh-mixer`、**不含** `dsh-mixer-spike`（装之前那里写的是 spike）。
 2. **冷启动**（关键，别用热重载代替）：**硬刷新**页面，确认**没有** `Failed to load plugins` / `web boot: N entry did not activate`。任何 `apply()` 改动都必须重做这一步。
@@ -357,7 +359,7 @@ e.dataTransfer.setData('text/plain', node.id)   // node.id 就是 SessionId
 19. **归档过滤**（第四轮）：在侧边栏归档一个会话 → 打开 `会话` 浮层，它**不在列表里**（与侧边栏一致）；若它本来在通道里，该通道同时消失。
 20. **面板内归档**（第四轮）：指针移到某会话行 → 行尾出现 `归档` → 点它：安静会话直接归档（侧边栏同一套动作）；**正在执行**的会话先在该行下方问一次，点 `停止并归档` 才动手，点 `取消` 什么都不发生。
 21. **归档可撤销**（2026-10-20，issue #12）：归档一个通道 → 顶栏出现 `已归档「…」撤销`；点 `撤销` → 会话回到原工作区、通道回到**原位置**且宽度不变；**6 秒**不点则 chip 自行消失；撤销失败（宿主拒绝/没提供方法）在顶栏有可见提示。
-22. **通道间跳转快捷键**（2026-10-20，§5.6）：调音台打开时按 `Cmd/Ctrl+Alt+1..9` → 焦点落到第 N 个通道的输入框（越界的通道给提示、不静默）；`Cmd/Ctrl+Alt+←/→` 从当前通道出发上/下一个并首尾环绕；**调音台没打开时按键不被吞**；在 DSH 的快捷键设置里能看到并改这 11 条命令。
+22. **通道间跳转快捷键**（2026-10-20，§5.6）：调音台打开时按 `Cmd/Ctrl+Alt+1..9` → 焦点落到第 N 个通道的输入框（越界的通道给提示、不静默）；`Cmd/Ctrl+Alt+←/→` 从当前通道出发上/下一个并首尾环绕（**Desktop Linux** 是 `Ctrl+Alt+]` / `Ctrl+Alt+[`）；**调音台没打开时按键不被吞**；在 DSH 的快捷键设置里能看到并改这 11 条命令。
 
 **验收记录（v1，2026-10-15，用户实测）**：在根包（`feat/mixer-v1` @ `5c8314b`，profile `web` 只装 `dsh-mixer`）上完成 —— 硬刷新冷启动**没有** `Failed to load plugins` / `web boot: N entry did not activate`；第 3–10 条逐条通过（含五档状态与左侧会话行逐档一致、持久化、归档联动、退出复原）。
 
@@ -506,6 +508,7 @@ agent 侧可复核的旁证（**只证明注册事实，不替代本清单的观
 | 1 | issue #12：快捷键：通道间跳转、solo 当前通道 | 本轮只做**跳转**（用户 2026-10-20 选定范围，solo 留在后续轮）；solo 的形态与出现时机另行确定 | §5.6 / §6.22 |
 | 2 | 键位与接入方式 | 走**宿主快捷键服务**（`ctx.shortcuts.register`：可发现 / 用户可改键 / 宿主仲裁冲突），`primary+alt+Digit1..9` 与 `primary+alt+ArrowRight/Left`，`regions: ['page','editable']`；不用时不吞键（`pass`），缺通道给 `blocked` + 原因 | §5.6 |
 | 3 | 跨作用域 | 快捷键在 `apply` 注册、面板每次渲染 publish `mixerRuntime`（`ids`/`focus`/`step`），卸载清空 —— 键击不会作用在过期通道列表上 | §5.6 / §11 |
+| 4 | 修（2026-10-20，同轮冷启动）：装进 profile 后 `pnpm dsh web` 报 `web boot: 1 entry did not activate / dsh-mixer: failed` | `primary+alt+方向键` 在 **Desktop Linux** 被宿主判为 `reserved`，而默认键位要在全部五个 profile 上过检（与当前设备无关）→ `register()` 抛 `Reserved shortcut default`。Linux 改用方括号，其余平台不变；新增宿主侧真检查（跑宿主自己的 `bindingIssue`）钉住这一类 | §5.6 / §6.22 / `tests/host-contract.test.mjs` |
 
 ### 9.1 仍开放
 
@@ -542,7 +545,7 @@ agent 侧可复核的旁证（**只证明注册事实，不替代本清单的观
 | `tests/interaction.test.mjs` | 把面板挂进 **jsdom + react-dom/client**，用真事件驱动（32 个用例）：× 关闭后停靠并可从顶栏放回（且 retain 未释放）、`会话` 浮层勾选写 board 与本地标题过滤、**左列行点击只把右列滚到该工作区、不导航，且行 hover 的「＋会话」在该工作区建会话并落第 0 位**、**新建走 `ctx.sessions.create` 并置顶 + 光标落在新格**、**刚新建完的主动离开不被抢回**、**复用同工作区空白会话**、**宿主入口的窄条件抢回（主动离开不抢）**、`Esc`/再点触发器/点浮层外三种关闭、**顶栏不出现工作区名而面板里出现**、**新建失败在顶栏可见**、**光标交接等迟到的 composer**、**触发器要有按钮样式**、**点左列工作区滚动右列**、**归档会话不在列表里**、**悬停出行尾归档且归档后该格关掉**、**正在执行先问一次再停止并归档**、**归档抛错/缺 API 都要出提示**、**归档进行中显示"归档中…"**、**归档后 6s 可撤销：通道回到原位置 + 原宽度、只保留最新一条、拒绝/缺方法都出提示**、**通道间跳转快捷键：注册 11 条、跳到第 N 个通道并聚焦、未打开时不吞键、越界与无通道给提示、next/prev 首尾环绕**、视图标签经工厂 seam 钉住 view、焦点标记、拖分界线（比例 + 380 夹紧 + 收尾）、头部拖动载荷（含**同尺寸替身虚影**：真实头部克隆、身体按 `bodyFitsCell` 克隆或骨架、离屏、下一个 task 移除，与 `.4` 占位）与「从 × 起拖被拒」、**空会话虚影保留 hero 与 composer**、**越界通道的虚影身体是骨架**、轨道 drop 重排并拒收非会话负载、**拖动时同宽空槽（让位）** |
 | `tests/store.test.mjs` | 用**宿主的真 store 引擎**跑持久化（5 个用例）：键名与 root 无后缀、坏数据逐字段兜底、第二个实例恢复、无 localStorage 时的可用性 |
 | `tests/sidebar.test.mjs` / `tests/labels.test.mjs` | 折叠幂等（5 个）与措辞对齐宿主字典（5 个） |
-| `tests/host-contract.test.mjs` | **宿主契约漂移哨兵**（8 个）：`external` 的名字仍在该 checkout 的平台静态表与 seed 表里、`inject` 每条边都指向真实存在的包、slot 注册仍提供 `store` 与 session 子槽座位、root store 仍以无 key 方式实例化、侧栏行状态的四个事实与三种 kind 仍在、轮次导航仍由容器查询隐藏、归档撤销仍走 `unarchiveSession` 且 toast hold 仍是 6000ms、快捷键注册表 `Shortcuts.register` 的形状与区域仍未变。其中前两条是真检查（能真失败），其余是锚点检查（命中 = 机制还在，不等于行为不变） |
+| `tests/host-contract.test.mjs` | **宿主契约漂移哨兵**（9 个）：`external` 的名字仍在该 checkout 的平台静态表与 seed 表里、`inject` 每条边都指向真实存在的包、slot 注册仍提供 `store` 与 session 子槽座位、root store 仍以无 key 方式实例化、侧栏行状态的四个事实与三种 kind 仍在、轮次导航仍由容器查询隐藏、归档撤销仍走 `unarchiveSession` 且 toast hold 仍是 6000ms、快捷键注册表 `Shortcuts.register` 的形状与区域仍未变、**每条默认键位都过宿主自己的 `bindingIssue` / 冲突判据（五个 profile 全部）**。其中前两条与最后一条是真检查（能真失败），其余是锚点检查（命中 = 机制还在，不等于行为不变） |
 | `package.json` | `dsh.client.external` = store + primitives；`inject` = shortcuts / commands / conversation / layout / workspace（Cordis 服务边：slots / sessions / layout / uiWorkspace / shortcuts）；脚本 `test` / `boot-check` / `check` |
 
 **换宿主怎么验**（拉新 DSH 分支、或换一个 checkout 构建运行之后）：
@@ -583,7 +586,7 @@ DSH_REPO=/新的/checkout 路径 npm run check
 
 另有四条行为常量，**只在文档与代码注释里约定、不进 `__test`**（它们不是判断，是时序参数，钉一个数字等于写同义反复）：`FOCUS_RETRY_FRAMES = 30`（光标交接等宿主 composer 出现的帧数上限，§5.1③）、`RECLAIM_WINDOW_MS = 2000`（抢回判据的时效窗，§5.1）、`HERO_LIFT_PX = 48`（空会话 hero 的光学上调，§4.4）与 `ARCHIVE_UNDO_MS = 6000`（归档撤销的时效窗，镜像宿主 toast 的 hold，§5.2）。
 
-后 4 条是 2026-10-15 第二轮新增（需求 1 / 2 / 4）。**用例数已落地**：v1 的 53 例 + 第二轮 15 例 = **68 例**全绿（`seams` +4、`render` +1、`interaction` +10）；第三轮再 +1（`interaction` 的「触发器要有按钮样」）；第四轮 +4（`seams` 的 `archiveActivityOf` + `interaction` 的归档过滤 / 悬停归档 / 停止并归档）；第五轮 +2（归档同步抛错 / 未提供 `archiveSession` 都要出提示，以及 `归档中…` 的进行中态）；第六轮 +1（`host-contract` 的 inject 名单哨兵）；第七轮 +1（`interaction` 的「替身虚影同尺寸/带真实头部/下一个 task 撤销」）；第八轮 +2（`interaction` 的「空会话虚影保留 hero 与 composer」「越界通道的虚影身体是骨架」）；第十一轮 **−1**（`landingWorkspace` 缝随「新建落点」退休一并删除，`interaction` 的左列用例原地改写为「跳转 + 行内新建」）；第十二轮 +4（`interaction` 的归档撤销三例：回原位/回宽度、失败与缺方法、只保留最新一条；`host-contract` 的归档撤销锚点）；第十三轮 +4（`interaction` 的通道跳转三例：跳第 N 个并聚焦、不吞键与越界提示、next/prev 首尾环绕；`host-contract` 的快捷键注册表锚点）= **86 例**。`tests/harness.mjs` 的假宿主已补齐 `ctx.sessions.create` 的记录、`sessions.list` / `layout.panelInfo` 两个可订阅源（含 `setList` / `setPanelInfo` 驱动），并且 `useStore` 改成真的订阅 + 版本号重渲染——原来只读快照，导致"面板自己的写入"在测试里根本不会触发重渲染，`×` 关闭那条用例是靠别的原因才过的。
+后 4 条是 2026-10-15 第二轮新增（需求 1 / 2 / 4）。**用例数已落地**：v1 的 53 例 + 第二轮 15 例 = **68 例**全绿（`seams` +4、`render` +1、`interaction` +10）；第三轮再 +1（`interaction` 的「触发器要有按钮样」）；第四轮 +4（`seams` 的 `archiveActivityOf` + `interaction` 的归档过滤 / 悬停归档 / 停止并归档）；第五轮 +2（归档同步抛错 / 未提供 `archiveSession` 都要出提示，以及 `归档中…` 的进行中态）；第六轮 +1（`host-contract` 的 inject 名单哨兵）；第七轮 +1（`interaction` 的「替身虚影同尺寸/带真实头部/下一个 task 撤销」）；第八轮 +2（`interaction` 的「空会话虚影保留 hero 与 composer」「越界通道的虚影身体是骨架」）；第十一轮 **−1**（`landingWorkspace` 缝随「新建落点」退休一并删除，`interaction` 的左列用例原地改写为「跳转 + 行内新建」）；第十二轮 +4（`interaction` 的归档撤销三例：回原位/回宽度、失败与缺方法、只保留最新一条；`host-contract` 的归档撤销锚点）；第十三轮 +4（`interaction` 的通道跳转三例：跳第 N 个并聚焦、不吞键与越界提示、next/prev 首尾环绕；`host-contract` 的快捷键注册表锚点）；同轮修 +1（`host-contract` 的「默认键位过宿主校验」）= **87 例**。`tests/harness.mjs` 的假宿主已补齐 `ctx.sessions.create` 的记录、`sessions.list` / `layout.panelInfo` 两个可订阅源（含 `setList` / `setPanelInfo` 驱动），并且 `useStore` 改成真的订阅 + 版本号重渲染——原来只读快照，导致"面板自己的写入"在测试里根本不会触发重渲染，`×` 关闭那条用例是靠别的原因才过的。
 
 **验证**：`npm run check`（语法 + **53 个用例** + 冷启动）在本机全绿；**浏览器行为已由用户按 §6 十条在根包上验收通过**（2026-10-15，装根包 + 卸 `dsh-mixer-spike` + 硬刷新；见 §6 验收记录）。
 **第二轮（需求 1–4）实现后的验证**：`npm run check` = **76 个用例全绿** + 冷启动 `PASS`（2026-10-15）；**§6 第 12–20 条属观感项，由用户在浏览器里逐条验收** —— 尤其"整格虚影"与"让位"两处只有真拖拽能验。
@@ -596,7 +599,8 @@ DSH_REPO=/新的/checkout 路径 npm run check
 
 **发布 v1.1.0（2026-10-20，发布后一轮交互改版）**：`package.json` bump 到 `1.1.0`，`main` fast-forward 到本点，tag **`v1.1.0`** + GitHub Release。内容：`会话` 浮层的新建入口挪进左列每个工作区行（hover 出 `＋会话`，§9.0f 第 1–2 行）、左列行 hover 与行内动作按钮的平常/hover 两态改用可见 token（§9.0f 第 3–4 行）；`npm run check` = 78 用例 + 冷启动 `PASS`，用户浏览器逐项验收通过。
 
-**第十三轮（2026-10-20，通道间跳转快捷键，issue #12）**：`npm run check` = **86 个用例 + 冷启动 `PASS`**（`boot-check` 新增断言：冷启动时 11 条快捷键命令都注册成功）。走宿主快捷键服务（新服务边 `shortcuts`），`primary+alt+数字/方向键`，**待用户浏览器验收**。
+**第十三轮（2026-10-20，通道间跳转快捷键，issue #12）**：`npm run check` = **87 个用例 + 冷启动 `PASS`**（`boot-check` 新增断言：冷启动时 11 条快捷键命令都注册成功）。走宿主快捷键服务（新服务边 `shortcuts`），`primary+alt+数字/方向键`（Desktop Linux 为方括号），**待用户浏览器验收**。
+**同轮修（2026-10-20）**：装进 profile 后 `pnpm dsh web` 报 `web boot: 1 entry did not activate / dsh-mixer: failed` —— 方向键默认值在 Desktop Linux 被宿主判为 `reserved`。改键位 + 新增宿主侧的真检查（`npm run check` 变红过一次，确认能拦住同一类回归）；**待用户冷启动复验**。
 
 **第十二轮（2026-10-20，归档可撤销，issue #12 增补）**：`npm run check` = **82 个用例 + 冷启动 `PASS`**。顶栏 6s 撤销 + 通道回原位/回宽度 + 剪枝豁免（§9.0g），**待用户浏览器验收**。
 

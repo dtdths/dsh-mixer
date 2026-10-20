@@ -128,3 +128,20 @@ onDragStart={e => { e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setDat
 - 拖拽过程中**读不到数据**（浏览器安全限制），只有 `drop` 时能 `getData`；所以位置计算与数据读取要分开：`dragover` 只算位置并画指示线，`drop` 才取 id。
 - 文本选中拖拽同样是 `text/plain`：**先验证 id 是已知会话**再改状态。
 - 落点索引是相对**当前渲染出的格子**算的；若被拖对象本来就在列表里，插入位要按"移除后"修正。
+
+## 7. 宿主会校验你的**每一个**默认键位，包括你没在跑的平台
+
+**症状**：装好插件、`pnpm dsh web` → `Failed to load plugins` / `web boot: 1 entry did not activate` / `dsh-mixer: failed`。控制台里那条错误是 `Reserved shortcut default: mixer.channel.next`。
+
+**原因**：`ShortcutRegistry.register` 的校验**与当前设备无关** —— 它遍历 `desktop`/`web` × `macos`/`windows`/`linux`，对**每个**声明了默认值的 profile 做 `normalizeBinding` → （Web 档）`isWebBindingAllowed` → `bindingIssue`，任一不过就抛错；`register` 又在 `apply()` 里，于是整个条目 FAILED。所以一个只在 Linux Desktop 有问题的默认值，会让 **macOS 上的浏览器**打不开页面。
+
+**证据**：
+
+- 校验循环：`packages/client/shortcuts/src/client/registry.ts` 的 `register()`
+- 预订规则：`packages/client/shortcuts/src/configuration.ts` 的 `bindingIssue`（`Ctrl+Alt+方向键` 在 Desktop Linux 下是 `reserved`）
+- 首次踩中：`dsh-mixer` 提交 `6d7f728`（通道跳转快捷键那次），2026-10-20
+
+**规则**：
+
+- 默认键位要在**全部五个 profile** 上合法；想只在部分平台绑定，就不声明那个 profile 的键（宿主的 `ui-workspace` 就这么做）。
+- `boot-check.mjs` / `tests/harness.mjs` 里的假 `register` 收什么都收，"11 条都注册了"证明不了宿主会接受。真判据要跑宿主自己的函数：见 `tests/host-contract.test.mjs` 的 `host registry accepts every shortcut default we register`（直接 `import` checkout 里的 `src/configuration.ts` / `src/binding.ts`，Node ≥ 22.18 原生剥离类型）。
