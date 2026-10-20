@@ -56,6 +56,26 @@ function stubBody(pane, { width = 400, height = 900 } = {}) {
   return body
 }
 
+/**
+ * Open the 会话 panel and press a workspace row's hover-only 「＋会话」 (§5.2,
+ * 2026-10-20: the create action lives on each workspace row, not in a footer button).
+ */
+async function createInWorkspace(ui, workspaceId) {
+  const { act, window } = ui
+  if (ui.$('[data-mixer-session-panel]') === null) {
+    act(() => { ui.$('[data-mixer-sessions]').dispatchEvent(new window.MouseEvent('click', { bubbles: true })) })
+  }
+  const row = ui.$(`[data-mixer-workspace="${workspaceId}"]`)
+  assert.ok(row !== null, `missing workspace row ${workspaceId}`)
+  act(() => { row.dispatchEvent(new window.MouseEvent('mouseover', { bubbles: true })) })
+  const action = ui.$(`[data-mixer-new="${workspaceId}"]`)
+  assert.ok(action !== null, 'hovering a workspace must offer its create action')
+  await act(async () => {
+    action.dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+    await new Promise(resolve => setTimeout(resolve, 0))
+  })
+}
+
 /** A dataTransfer stand-in that records what the plugin writes. */
 function fakeDataTransfer(payload) {
   const written = {}
@@ -97,7 +117,8 @@ test('interaction: the 会话 panel writes the board store, and filters by title
   click(ui.$('[data-mixer-sessions]'))
   assert.ok(ui.$('[data-mixer-session-panel]') !== null, 'the 会话 button must open the panel')
   /* The old two-LEVEL dropdown needed a workspace click before any Session showed; the
-     panel lists them immediately, and the workspace column is only about the landing. */
+     panel lists them immediately, and the workspace column is a jump list plus each
+     row's own create action. */
   const boxes = () => [...ui.$('[data-mixer-session-panel]').querySelectorAll('input[type=checkbox]')]
   assert.equal(boxes().length, 3)
   assert.deepEqual(boxes().map(box => box.checked), [true, true, false])
@@ -120,7 +141,7 @@ test('interaction: the 会话 panel writes the board store, and filters by title
   assert.deepEqual(ui.instance.getSnapshot().channels, ['s1', 's3'])
 })
 
-test('interaction: the left column only changes where a new Session lands (§5.2)', async () => {
+test('interaction: a workspace row jumps the right column and creates in that workspace (§5.2)', async () => {
   const ui = await loadInteractive()
   const twoWorkspaces = {
     items: [
@@ -132,22 +153,31 @@ test('interaction: the left column only changes where a new Session lands (§5.2
   ui.draw({ board: { channels: ['s1'], weights: {} }, list, status, workspaces: twoWorkspaces })
   const { act, window } = ui
   const click = element => act(() => { element.dispatchEvent(new window.MouseEvent('click', { bubbles: true })) })
+  const hover = element => act(() => { element.dispatchEvent(new window.MouseEvent('mouseover', { bubbles: true })) })
 
   click(ui.$('[data-mixer-sessions]'))
-  /* s1 lives in w1, so w1 is the preselect and carries the tag. */
-  assert.match(ui.$('[data-mixer-landing="w1"]').textContent, /新建落点/)
-  assert.doesNotMatch(ui.$('[data-mixer-landing="w2"]').textContent, /新建落点/)
+  const w2 = ui.$('[data-mixer-workspace="w2"]')
+  assert.ok(w2 !== null)
+  /* 2026-10-20: 「新建落点」 retired — no tag, no preselection, the row itself is the
+     target. The action is hover-only, like the archive action on a Session row. */
+  assert.doesNotMatch(w2.textContent, /新建落点/)
+  assert.equal(ui.$('[data-mixer-new="w2"]'), null, 'the create action is hover-only')
 
-  click(ui.$('[data-mixer-landing="w2"]'))
-  assert.match(ui.$('[data-mixer-landing="w2"]').textContent, /新建落点/)
-  assert.doesNotMatch(ui.$('[data-mixer-landing="w1"]').textContent, /新建落点/)
-  /* Picking a workspace must NOT navigate: the removed 「切换到此工作区」 called
-     uiWorkspace.openWorkspace(), which reveals and leaves the mixer (ADR-0003). */
+  /* Clicking a row is a JUMP only: the right column scrolls to that workspace, nothing
+     navigates and nothing is selected. */
+  click(w2)
+  assert.deepEqual(ui.window.__scrolls, ['w2'])
   assert.deepEqual(ui.host.selectPanelCalls, [])
-  /* Round 3: the left column doubles as a jump list — each pick scrolls the right
-     column to that workspace's group. */
-  click(ui.$('[data-mixer-landing="w1"]'))
-  assert.deepEqual(ui.window.__scrolls, ['w2', 'w1'])
+  assert.deepEqual(ui.instance.getSnapshot().channels, ['s1'])
+
+  /* Its own action creates in THAT workspace, first in the channel row. */
+  hover(w2)
+  await act(async () => {
+    ui.$('[data-mixer-new="w2"]').dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+    await new Promise(resolve => setTimeout(resolve, 0))
+  })
+  assert.deepEqual(ui.host.createCalls, [{ workspaceId: 'w2' }])
+  assert.deepEqual(ui.instance.getSnapshot().channels, ['created-1', 's1'])
 })
 
 test('interaction: the 会话 trigger reads as a button, not as plain text (§5.2)', async () => {
@@ -162,15 +192,8 @@ test('interaction: the 会话 trigger reads as a button, not as plain text (§5.
 
 test('interaction: 新建会话 creates through the session service and lands first (§4.1/§5.1)', async () => {
   const ui = await mountTwo()
-  const { act, window } = ui
-  const click = element => act(() => { element.dispatchEvent(new window.MouseEvent('click', { bubbles: true })) })
-
-  click(ui.$('[data-mixer-sessions]'))
-  /* `ctx.sessions.create` resolves asynchronously, so the flush has to wait for it. */
-  await act(async () => {
-    ui.$('[data-mixer-new]').dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
-    await new Promise(resolve => setTimeout(resolve, 0))
-  })
+  /* `ctx.sessions.create` resolves asynchronously; the helper flushes it. */
+  await createInWorkspace(ui, 'w1')
 
   /* The host's `startSession` would have revealed the Session and blanked the panel;
      `ctx.sessions.create` must be the path instead (ADR-0003). */
@@ -185,16 +208,11 @@ test('interaction: 新建会话 creates through the session service and lands fi
 
 test('interaction: leaving by opening a Session WITH history is never undone by the reclaim (§5.1)', async () => {
   const ui = await mountTwo()
-  const { act, window } = ui
-  const click = element => act(() => { element.dispatchEvent(new window.MouseEvent('click', { bubbles: true })) })
+  const { act } = ui
 
   /* The plugin's own ＋ leaves a blank channel behind; that must not make the NEXT
      deliberate exit look like a host navigation. */
-  click(ui.$('[data-mixer-sessions]'))
-  await act(async () => {
-    ui.$('[data-mixer-new]').dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
-    await new Promise(resolve => setTimeout(resolve, 0))
-  })
+  await createInWorkspace(ui, 'w1')
   const grown = {
     ids: ['s1', 's2', 's3', 'created-1'],
     byId: { ...list.byId, 'created-1': { id: 'created-1', displayTitle: '（空白）', blank: true, cwd: '/repo' } },
@@ -217,15 +235,9 @@ test('interaction: leaving by opening a Session WITH history is never undone by 
 
 test('interaction: a failed create says so instead of silently doing nothing (§5.2)', async () => {
   const ui = await mountTwo()
-  const { act, window } = ui
-  const click = element => act(() => { element.dispatchEvent(new window.MouseEvent('click', { bubbles: true })) })
   ui.host.setCreateFailure({ code: 'session/writer-held', message: 'writer held' })
 
-  click(ui.$('[data-mixer-sessions]'))
-  await act(async () => {
-    ui.$('[data-mixer-new]').dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
-    await new Promise(resolve => setTimeout(resolve, 0))
-  })
+  await createInWorkspace(ui, 'w1')
 
   /* The board is untouched, and the bar carries the reason — the host's own entrance
      reported failures through its notify service, so ours must not be a silent no-op. */
@@ -239,13 +251,7 @@ test('interaction: the caret hand-off waits for a composer that paints late (§5
   const ui = await loadInteractive({ withComposer: false })
   ui.draw({ board: { channels: ['s1'], weights: {} }, list, status, workspaces })
   const { act, window } = ui
-  const click = element => act(() => { element.dispatchEvent(new window.MouseEvent('click', { bubbles: true })) })
-
-  click(ui.$('[data-mixer-sessions]'))
-  await act(async () => {
-    ui.$('[data-mixer-new]').dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
-    await new Promise(resolve => setTimeout(resolve, 0))
-  })
+  await createInWorkspace(ui, 'w1')
   /* The channel is there, but its composer is not: nothing may be focused yet, and the
      intent must survive instead of being dropped after one query. */
   assert.ok(ui.$('[data-mixer-pane="created-1"]') !== null)
@@ -257,7 +263,7 @@ test('interaction: the caret hand-off waits for a composer that paints late (§5
   assert.equal(ui.document.activeElement, field)
 })
 
-test('interaction: a blank Session of the landing workspace is reused, not recreated (§4.1)', async () => {
+test('interaction: a blank Session of the clicked workspace is reused, not recreated (§4.1)', async () => {
   const ui = await loadInteractive()
   const withBlank = {
     ids: ['s1', 's2', 'b1'],
@@ -273,11 +279,7 @@ test('interaction: a blank Session of the landing workspace is reused, not recre
     archivedSessionIds: [],
   }
   ui.draw({ board: { channels: ['s1', 's2'], weights: {} }, list: withBlank, status, workspaces: ws })
-  const { act, window } = ui
-  const click = element => act(() => { element.dispatchEvent(new window.MouseEvent('click', { bubbles: true })) })
-
-  click(ui.$('[data-mixer-sessions]'))
-  click(ui.$('[data-mixer-new]'))
+  await createInWorkspace(ui, 'w1')
   assert.deepEqual(ui.host.createCalls, [], 'a blank Session of that workspace must be reused')
   assert.deepEqual(ui.instance.getSnapshot().channels, ['b1', 's1', 's2'])
 })
@@ -351,9 +353,9 @@ test('interaction: the top bar never names a workspace, the panel does (§5.2)',
   assert.doesNotMatch(bar.textContent, /主工作区/)
   assert.match(bar.textContent, /调音台/)
 
-  /* The name is still reachable where it answers a real question: the landing column. */
+  /* The name is still reachable where it answers a real question: the workspace column. */
   click(ui.$('[data-mixer-sessions]'))
-  assert.match(ui.$('[data-mixer-landing="w1"]').textContent, /主工作区/)
+  assert.match(ui.$('[data-mixer-workspace="w1"]').textContent, /主工作区/)
 })
 
 test('interaction: archived Sessions are hidden from the panel, like the sidebar (§5.2)', async () => {

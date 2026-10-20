@@ -168,6 +168,9 @@ window.__ModuleLoader__.load({
          the neutral alpha the host already ships for that (10% black / 12% white). */
       skeleton: 'var(--dsw-alias-bg-skeleton)',
       skeletonLine: 'var(--dsw-alias-border-l2)',
+      /* The host's interactive hover wash (`bg-layer-1/2` are WHITE in the light theme,
+         so a hover painted with them is invisible there). */
+      hover: 'var(--dsw-alias-interactive-bg-hover)',
       /* The host's focus colour (ui-theme focus.css falls back to this). */
       business: 'var(--dsw-alias-state-business-primary)',
     }
@@ -286,64 +289,11 @@ window.__ModuleLoader__.load({
     }
 
     /**
-     * The host's own "most recently used workspace" rule
-     * (`ui-workspace/src/client/navigation.ts:458-475`, `recentWorkspace`), which is
-     * what `startSession` falls back to when no workspace is named. Not exported by the
-     * service face, so it is mirrored here from the same two facts the plugin has:
-     * each workspace's newest Session (`updatedAt`), or its own `createdAt` when the
-     * list has not caught up. Ties follow host order, like the original.
-     * @param items - the host's workspace items, in host order.
-     * @param summaries - the Session list rows by id.
-     * @returns the workspace id to fall back to, or undefined with no workspace.
-     */
-    function recentWorkspaceId(items, summaries) {
-      let selected
-      let selectedTime = Number.NEGATIVE_INFINITY
-      for (const item of items) {
-        let latest = Number.NEGATIVE_INFINITY
-        const members = Array.isArray(item.sessionIds) ? item.sessionIds : []
-        for (const sessionId of members) {
-          const summary = summaries === undefined ? undefined : summaries[sessionId]
-          if (summary !== undefined && typeof summary.updatedAt === 'number') {
-            latest = Math.max(latest, summary.updatedAt)
-          }
-        }
-        if (latest === Number.NEGATIVE_INFINITY) latest = Date.parse(item.createdAt)
-        if (selected === undefined || latest > selectedTime) {
-          selected = item.workspaceId
-          selectedTime = latest
-        }
-      }
-      return selected
-    }
-
-    /**
-     * Where a new Session lands: the workspace owning the first visible channel
-     * (matched by cwd), else the host's own "most recently used" fallback (spec §5.2).
-     * The mixer has no "current workspace" of its own — the top bar never shows one —
-     * so this value answers exactly two questions: where `＋新建会话` creates, and which
-     * row the panel's left column preselects.
-     * @param workspaces - the host's workspace items.
-     * @param summaries - the Session list rows by id.
-     * @param firstChannelId - the first visible channel's Session id, if any.
-     * @returns a workspace id, or undefined when the host has no workspace.
-     */
-    function landingWorkspace(workspaces, summaries, firstChannelId) {
-      const items = Array.isArray(workspaces) ? workspaces : []
-      if (items.length === 0) return undefined
-      const summary = firstChannelId === undefined || summaries === undefined
-        ? undefined
-        : summaries[firstChannelId]
-      const current = summary === undefined ? undefined : items.find(item => item.path === summary.cwd)
-      return current === undefined ? recentWorkspaceId(items, summaries) : current.workspaceId
-    }
-
-    /**
      * The blank Session that "new session" should REUSE instead of creating another
      * one, mirroring the host's own `reuseOrCreateBlank` (navigation.ts:185-198): a
-     * blank Session inside the landing workspace, still listed, not archived.
+     * blank Session inside the workspace the user clicked, still listed, not archived.
      * @param list - the Sessions list snapshot.
-     * @param workspace - the landing workspace item, or undefined.
+     * @param workspace - the target workspace item, or undefined.
      * @param archivedIds - the host's archived Session ids.
      * @returns the Session id to reuse, or undefined when a real create is needed.
      */
@@ -574,8 +524,9 @@ window.__ModuleLoader__.load({
       ddWrap: { position: 'relative' },
       /* The `会话` popover (spec §5.2, requirement 4): two COLUMNS, because the old
          two-LEVEL dropdown made the user pick a workspace before any Session was even
-         visible, and buried "new session" one level down. Left column = landing
-         workspace only; right column = the channel picker. */
+         visible, and buried "new session" one level down. Left column = the workspace
+         jump list, each row carrying its own 「＋会话」; right column = the channel
+         picker (2026-10-20: 「新建落点」 retired, every row IS the target). */
       backdrop: { position: 'fixed', inset: 0, zIndex: 39, background: 'transparent' },
       panel: {
         position: 'absolute', top: 'calc(100% + 6px)', left: 0, zIndex: 40,
@@ -594,15 +545,14 @@ window.__ModuleLoader__.load({
         display: 'flex', alignItems: 'center', gap: 8, padding: '6px 8px', borderTop: `1px solid ${T.b1}`,
       },
       panelHint: { color: T.fg2, font: `11.5px/1.6 ${SANS}`, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
-      landingRow: {
+      /* A workspace row: click jumps the right column to that workspace, hovering
+         reveals its own create action. The hover wash is the host's interactive token,
+         so it is visible in BOTH themes (spec §5.2). */
+      workspaceRow: {
         display: 'flex', alignItems: 'center', gap: 6, padding: '6px 8px', cursor: 'pointer',
         font: `13px/1.6 ${SANS}`, borderRadius: SURFACE,
       },
-      landingRowOn: { background: T.l1, fontWeight: 600 },
-      landingTag: {
-        flex: '0 0 auto', padding: '1px 6px', borderRadius: PILL, background: T.l2,
-        border: `1px solid ${T.b1}`, color: T.fg2, font: `11px/1.7 ${SANS}`,
-      },
+      workspaceRowHover: { background: T.hover },
       searchRow: { padding: '6px 8px', borderBottom: `1px solid ${T.b1}` },
       searchInput: {
         width: '100%', font: `13px/1.6 ${SANS}`, padding: '5px 8px', borderRadius: SURFACE,
@@ -612,7 +562,7 @@ window.__ModuleLoader__.load({
         display: 'flex', alignItems: 'center', gap: 7, padding: '4px 7px',
         font: `13px/1.6 ${SANS}`, borderRadius: SURFACE,
       },
-      sessionRowOn: { background: T.l1 },
+      sessionRowOn: { background: T.hover },
       sessionPick: {
         display: 'flex', alignItems: 'center', gap: 7, flex: 1, minWidth: 0, cursor: 'pointer',
       },
@@ -773,27 +723,31 @@ window.__ModuleLoader__.load({
      * Session goes) and channel-set ownership (which Sessions I follow) — and made
      * the user pick a workspace before a single Session was visible.
      *
-     * Left column = the landing workspace, and nothing else: with the top bar showing
-     * no workspace name, this is the only place the question is answered. Right column
-     * = the channel picker, with a local title filter and the waiting / 已移出 state on
-     * every row.
+     * Left column = the workspace jump list, and each row also carries that workspace's
+     * 「＋会话」 on hover (2026-10-20: the bottom button and the 「新建落点」
+     * selection it needed are gone — every row IS its own landing). Right column = the
+     * channel picker, with a local title filter and the waiting / 已移出 state on every
+     * row.
      */
     function SessionPanel(props) {
       const {
         onClose, workspaces, sessions, channels, parked, attention,
-        landingId, landingTitle, onPickLanding, onToggleChannel, onNewSession,
+        onToggleChannel, onNewSession,
         archived, onArchive, onStopAndArchive, archiveConfirm, archivePending, onDismissArchive,
       } = props
       const [query, setQuery] = useState('')
       /* Which row the pointer is on: the archive action only appears on hover, and there
          is no stylesheet to do that with (spec §5.2). */
       const [hoverId, setHoverId] = useState(undefined)
+      /* The left column's hovered workspace: its 「＋会话」 shows on hover only, the
+         same reveal rule as the archive action on a Session row (spec §5.2). */
+      const [hoverWorkspaceId, setHoverWorkspaceId] = useState(undefined)
       const needle = query.trim()
-      /* The right column scrolls to the workspace picked on the left (round 3: 左列同时
-         当跳转表用) — the two columns are one control, not two. */
+      /* The right column scrolls to the workspace clicked on the left (round 3: 左列同时
+         当跳转表用) — the two columns are one control, not two. Nothing is selected: the
+         row that was clicked already carries the create action (spec §5.2). */
       const rowsRef = useRef(null)
-      const pickLanding = (workspaceId) => {
-        onPickLanding(workspaceId)
+      const jumpToWorkspace = (workspaceId) => {
         const rows = rowsRef.current
         if (rows === null || typeof rows.querySelectorAll !== 'function') return
         const group = [...rows.querySelectorAll('[data-mixer-group]')]
@@ -817,29 +771,43 @@ window.__ModuleLoader__.load({
           style: CSS.panel,
           'data-mixer-session-panel': '',
           role: 'dialog',
-          'aria-label': '会话与新建落点',
+          'aria-label': '会话与工作区',
         },
-          h('div', { style: CSS.panelColLeft, 'data-mixer-landing-column': '' },
+          h('div', { style: CSS.panelColLeft, 'data-mixer-workspace-column': '' },
             h('div', { style: CSS.panelHead }, '工作区'),
             workspaces.length === 0
               ? h('div', { style: CSS.panelEmpty }, '还没有工作区')
-              : workspaces.map(workspace => h('div', {
-                  key: workspace.workspaceId,
-                  style: {
-                    ...CSS.landingRow,
-                    ...(workspace.workspaceId === landingId ? CSS.landingRowOn : null),
+              : workspaces.map(workspace => {
+                  const hovered = hoverWorkspaceId === workspace.workspaceId
+                  return h('div', {
+                    key: workspace.workspaceId,
+                    style: { ...CSS.workspaceRow, ...(hovered ? CSS.workspaceRowHover : null) },
+                    'data-mixer-workspace': workspace.workspaceId,
+                    title: `跳到 ${workspace.title} 的会话`,
+                    onMouseEnter: () => setHoverWorkspaceId(workspace.workspaceId),
+                    onMouseLeave: () => setHoverWorkspaceId(current => (
+                      current === workspace.workspaceId ? undefined : current
+                    )),
+                    onClick: () => jumpToWorkspace(workspace.workspaceId),
                   },
-                  'data-mixer-landing': workspace.workspaceId,
-                  title: `新建会话落在此工作区：${workspace.path}`,
-                  onClick: () => pickLanding(workspace.workspaceId),
-                },
-                  h('span', {
-                    style: { flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
-                  }, workspace.title),
-                  workspace.workspaceId === landingId
-                    ? h('span', { style: CSS.landingTag }, '新建落点')
-                    : null,
-                )),
+                    h('span', {
+                      style: { flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+                    }, workspace.title),
+                    /* Its own click target, so pressing it cannot also fire the jump. */
+                    hovered
+                      ? h('button', {
+                          type: 'button',
+                          style: CSS.rowAction,
+                          'data-mixer-new': workspace.workspaceId,
+                          title: `在 ${workspace.title} 新建会话并放到第一位`,
+                          onClick: (event) => {
+                            event.stopPropagation()
+                            onNewSession(workspace.workspaceId)
+                          },
+                        }, '＋会话')
+                      : null,
+                  )
+                }),
           ),
           h('div', { style: CSS.panelColRight, 'data-mixer-session-column': '' },
             h('div', { style: CSS.searchRow },
@@ -924,16 +892,8 @@ window.__ModuleLoader__.load({
                     )
                   })),
             h('div', { style: CSS.panelFoot },
-              h('button', {
-                style: CSS.button,
-                'data-mixer-new': '',
-                title: landingTitle === undefined
-                  ? '新建会话'
-                  : `在 ${landingTitle} 新建会话并放到第一位`,
-                onClick: onNewSession,
-              }, '＋ 在此新建会话'),
-              h('span', { style: { flex: 1 } }),
               h('span', { style: CSS.panelHint }, needle === '' ? '勾选即加入通道' : `过滤：${needle}`),
+              h('span', { style: { flex: 1 } }),
             ),
           ),
         ))
@@ -943,8 +903,8 @@ window.__ModuleLoader__.load({
       const {
         channels, hiddenWaiting, hiddenCount, parked,
         attention, backToConversation,
-        workspaces, sessions, landingId, landingTitle,
-        onPickLanding, onToggleChannel, onNewSession, onPanelOpened, notice,
+        workspaces, sessions,
+        onToggleChannel, onNewSession, onPanelOpened, notice,
         archived, onArchive, onStopAndArchive, archiveConfirm, archivePending, onDismissArchive,
       } = props
       const [panelOpen, setPanelOpen] = useState(false)
@@ -981,15 +941,15 @@ window.__ModuleLoader__.load({
             'data-mixer-sessions': '',
             'aria-expanded': panelOpen ? 'true' : 'false',
             'aria-haspopup': 'dialog',
-            title: '关注的会话、新建落点与新建会话',
+            title: '关注的会话、工作区跳转与新建会话',
           }, `会话${channels.length > 0 ? ` · ${channels.length}` : ''}`),
           panelOpen
             ? h(SessionPanel, {
                 onClose: () => setPanelOpen(false),
                 workspaces, sessions, channels, parked, attention,
-                landingId, landingTitle, onPickLanding, onToggleChannel,
+                onToggleChannel,
                 archived, onArchive, onStopAndArchive, archiveConfirm, archivePending, onDismissArchive,
-                onNewSession: () => { setPanelOpen(false); onNewSession() },
+                onNewSession: (workspaceId) => { setPanelOpen(false); onNewSession(workspaceId) },
               })
             : null),
 
@@ -1593,9 +1553,6 @@ window.__ModuleLoader__.load({
          component state either, because the panel is remounted whenever the mixer
          takes its centre panel back (ADR-0003). */
       const parked = parkedIds()
-      /* Which workspace a new Session lands in. `undefined` = follow the first visible
-         channel; a pick in the panel lasts for that one open (spec §5.2). */
-      const [landing, setLanding] = useState(undefined)
       /* The Session whose composer must own the caret once it is on screen. Explicit,
          because the host's InputBar auto-focuses every pane and the last mount wins
          (spec §5.1, requirement 2). */
@@ -1756,14 +1713,6 @@ window.__ModuleLoader__.load({
         })
       })
       const hiddenWaiting = parked.filter(id => attention[id] !== undefined).length
-      /* Requirement 4: the bar shows no workspace name, so this value exists only to
-         answer "where does ＋新建会话 land" — the first visible channel's workspace, or
-         the one picked in the panel for this open. */
-      const landingId = landing === undefined
-        ? landingWorkspace(workspaces, summaries, channels[0])
-        : landing
-      const landingItem = workspaces.find(workspace => workspace.workspaceId === landingId)
-
       const toggleChannel = (sessionId) => {
         unpark(sessionId)
         if (currentBoard.includes(sessionId)) {
@@ -1780,9 +1729,11 @@ window.__ModuleLoader__.load({
         actions.setChannels([...visible, ...parkedIds()])
         unparkAll()
       }
-      /* Requirement 2 (spec §4.1): the new channel goes FIRST, reusing the landing
-         workspace's blank Session when there is one — the host does the same in
-         `reuseOrCreateBlank`, so "new session" does not pile up blank Sessions. */
+      /* Requirement 2 (spec §4.1): the new channel goes FIRST, reusing a blank Session
+         of the CLICKED workspace when there is one — the host does the same in
+         `reuseOrCreateBlank`, so "new session" does not pile up blank Sessions. Every
+         workspace row in the panel carries this action, so the workspace is an argument
+         (2026-10-20: 「新建落点」 retired, spec §5.2). */
       const acceptNewChannel = (sessionId) => {
         refFor(sessionId)
         unpark(sessionId)
@@ -1791,8 +1742,9 @@ window.__ModuleLoader__.load({
         actions.setChannels(moveChannel(channelsRef.current, sessionId, 0))
         setFocusId(sessionId)
       }
-      const createChannel = () => {
-        const target = blankTargetFor(list, landingItem, archivedIds)
+      const createChannel = (workspaceId) => {
+        const targetWorkspace = workspaces.find(workspace => workspace.workspaceId === workspaceId)
+        const target = blankTargetFor(list, targetWorkspace, archivedIds)
         if (target !== undefined) {
           setNotice(undefined)
           acceptNewChannel(target)
@@ -1801,7 +1753,7 @@ window.__ModuleLoader__.load({
         /* `ctx.sessions.create`, not `uiWorkspace.startSession`: the host's path is
            `openWorkspace → replaceMain(…, 'reveal') → selectPanel(null)`, which would
            throw the user out of the mixer (ADR-0003). */
-        void createSession(landingId).then((result) => {
+        void createSession(workspaceId).then((result) => {
           const sessionId = result === undefined ? undefined : result.sessionId
           if (sessionId === undefined || sessionId === null || sessionId === '') {
             /* Silently doing nothing would be worse than the host path it replaces. */
@@ -1921,17 +1873,13 @@ window.__ModuleLoader__.load({
           backToConversation,
           workspaces,
           sessions: summaries,
-          landingId,
-          landingTitle: landingItem === undefined ? undefined : landingItem.title,
-          /* Each open starts from the derived landing, and drops a stale failure note:
-             the note is about one attempt, not about the bar's steady state. */
+          /* Each open drops a stale failure note: the note is about one attempt, not
+             about the bar's steady state. */
           onPanelOpened: () => {
-            setLanding(undefined)
             setNotice(undefined)
             setArchiveConfirm(undefined)
             setArchivePending(undefined)
           },
-          onPickLanding: (workspaceId) => setLanding(workspaceId),
           onToggleChannel: toggleChannel,
           onNewSession: createChannel,
           archived: archivedIds,
@@ -2008,7 +1956,6 @@ window.__ModuleLoader__.load({
       normalizeBoard,
       moveChannel,
       heroFor,
-      landingWorkspace,
       blankTargetFor,
       shouldReclaimPanel,
       archiveActivityOf,

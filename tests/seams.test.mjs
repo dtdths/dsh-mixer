@@ -20,7 +20,6 @@ const {
   normalizeBoard,
   moveChannel,
   heroFor,
-  landingWorkspace,
   blankTargetFor,
   shouldReclaimPanel,
   archiveActivityOf,
@@ -231,45 +230,8 @@ test('heroFor: a blank Session gets the host hero phase, everything else stays d
 })
 
 /*
- * Requirement 4 (spec §5.2): the top bar shows no workspace name, so the ONLY
- * consumer of "which workspace" is the landing question. The match is by cwd, like the
- * host's own workspace lookup; with no channel to go by it mirrors the host's
- * `recentWorkspace` fallback (newest Session, else the workspace's own createdAt).
- */
-test('landingWorkspace: the first channel\'s workspace, else the host\'s most recent one', () => {
-  const items = [
-    { workspaceId: 'w1', path: '/a', createdAt: '2026-01-01T00:00:00Z', sessionIds: ['s1'] },
-    { workspaceId: 'w2', path: '/b', createdAt: '2026-01-02T00:00:00Z', sessionIds: ['s2'] },
-  ]
-  const summaries = {
-    s1: { id: 's1', cwd: '/a', updatedAt: 100 },
-    s2: { id: 's2', cwd: '/b', updatedAt: 200 },
-  }
-  assert.equal(landingWorkspace(items, summaries, 's2'), 'w2')
-  assert.equal(landingWorkspace(items, summaries, 's1'), 'w1')
-  /* A channel whose cwd matches nothing falls back to the recent rule, NOT to the first
-     row: w2 holds the newest Session. */
-  assert.equal(landingWorkspace(items, summaries, 's9'), 'w2')
-  assert.equal(landingWorkspace(items, { s9: { id: 's9', cwd: '/nope', updatedAt: 1 } }, 's9'), 'w2')
-  /* Same input with no channel at all: the same recent rule. */
-  assert.equal(landingWorkspace(items, summaries, undefined), 'w2')
-  /* No Session timestamps to go by: the workspace's own createdAt decides. */
-  const bare = {
-    w1: { id: 'w1', cwd: '/a' },
-    w2: { id: 'w2', cwd: '/b' },
-  }
-  assert.equal(landingWorkspace(items, bare, undefined), 'w2')
-  /* Ties (and unparseable createdAt) keep host order, like the host's own loop. */
-  const tied = { ...bare, w2: { id: 'w2', cwd: '/b' } }
-  assert.equal(landingWorkspace([items[1], items[0]], tied, undefined), 'w2')
-  /* No workspace at all: there is nowhere to land. */
-  assert.equal(landingWorkspace([], summaries, 's1'), undefined)
-  assert.equal(landingWorkspace(undefined, summaries, 's1'), undefined)
-})
-
-/*
- * Requirement 2 (spec §4.1): "new session" reuses a blank Session of the landing
- * workspace before creating one, mirroring the host's reuseOrCreateBlank.
+ * Requirement 2 (spec §4.1): "new session" reuses a blank Session of the workspace
+ * whose row was clicked before creating one, mirroring the host's reuseOrCreateBlank.
  */
 test('blankTargetFor: reuses a listed, unarchived blank Session of that workspace only', () => {
   const workspace = { workspaceId: 'w1', path: '/a', sessionIds: ['b1', 'b2', 's1'] }
@@ -288,7 +250,7 @@ test('blankTargetFor: reuses a listed, unarchived blank Session of that workspac
      not ours to reuse. */
   assert.equal(blankTargetFor({ ids: ['b2'], byId: base.byId }, workspace, []), undefined)
   assert.equal(blankTargetFor(base, { ...workspace, sessionIds: ['s1'] }, []), undefined)
-  /* No landing workspace, no list, or no blank row: create instead of reusing. */
+  /* No target workspace, no list, or no blank row: create instead of reusing. */
   assert.equal(blankTargetFor(base, undefined, []), undefined)
   assert.equal(blankTargetFor(undefined, workspace, []), undefined)
   assert.equal(blankTargetFor({ ids: ['s1'], byId: base.byId }, workspace, []), undefined)
