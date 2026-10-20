@@ -18,6 +18,7 @@ const {
   runningSubagentCount,
   subagentCatalogOf,
   normalizeBoard,
+  createChannelLedger,
   moveChannel,
   heroFor,
   blankTargetFor,
@@ -227,6 +228,38 @@ test('heroFor: a blank Session gets the host hero phase, everything else stays d
   assert.deepEqual(heroFor(undefined), { phase: 'active', hero: false })
   assert.deepEqual(heroFor(null), { phase: 'active', hero: false })
   assert.deepEqual(heroFor({}), { phase: 'active', hero: false })
+})
+
+/*
+ * Spec §4.1, the two bugs this ledger exists for: a channel pruned the instant it was
+ * created, and a channel pruned again right after its archive was undone.
+ */
+test('createChannelLedger: exemptions graduate when the host agrees, and prune once', () => {
+  const ledger = createChannelLedger()
+  const board = ['s1', 's2']
+
+  /* A freshly created id is briefly absent from the host list: it must survive. */
+  ledger.note('new', 'born')
+  assert.deepEqual(ledger.survivors(['new', 's1'], ['s1'], []), ['new', 's1'])
+  /* …and stops being exempt the moment its row lands. */
+  ledger.graduate(['new', 's1'], [])
+  assert.equal(ledger.reasonOf('new'), undefined)
+  assert.deepEqual(ledger.survivors(['new', 's1'], ['s1'], []), ['s1'])
+
+  /* A just-unarchived id is still called archived by the host snapshot: it must survive
+     that snapshot, and its width must survive too. */
+  ledger.note('back', 'returned')
+  assert.deepEqual(ledger.survivors(['back', 's1'], ['back', 's1'], ['back']), ['back', 's1'])
+  assert.deepEqual(ledger.staleWeights({ s1: 1, back: 2, gone: 3 }, ['back', 's1'], ['back', 'gone']), ['gone'])
+  /* The exemption ends once the snapshot stops calling it archived. */
+  ledger.graduate(['back', 's1'], [])
+  assert.equal(ledger.reasonOf('back'), undefined)
+
+  /* Realities the ledger keeps honouring: an empty host list prunes nothing, an archived
+     id is gone, and a channel put away with the x keeps its width. */
+  assert.deepEqual(ledger.survivors(board, [], ['s1']), board)
+  assert.deepEqual(ledger.survivors(board, ['s1', 's2'], ['s1']), ['s2'])
+  assert.deepEqual(ledger.staleWeights({ s1: 1, gone: 2 }, ['s1'], []), ['gone'])
 })
 
 /*

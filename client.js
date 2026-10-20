@@ -155,6 +155,64 @@ window.__ModuleLoader__.load({
      */
     const ARCHIVE_UNDO_MS = 6000
     /**
+     * The board's membership ledger (spec §4.1): the ONE module that answers "does this
+     * Session still belong on the board, and is this width entry stale?".
+     *
+     * It exists because that single rule used to be re-derived in two effects, with the
+     * exemptions as two identical id-set handles (`createdSessions` / `restoredSessions`)
+     * and a third, subtly different copy of the weighting clause. Two shipped bugs lived
+     * exactly there: a channel pruned the instant it was created, and a channel pruned
+     * again right after its archive was undone.
+     *
+     * An exemption is a REASON, not a boolean, because the two reasons graduate at
+     * different moments: `born` until the host list catalogues the Session, `returned`
+     * until the host stops calling it archived.
+     * @returns the ledger's interface: note / forget / graduate / survivors / staleWeights.
+     */
+    function createChannelLedger() {
+      /* id -> 'born' | 'returned' */
+      const exempt = new Map()
+
+      const note = (sessionId, reason) => { exempt.set(sessionId, reason) }
+      const forget = (sessionId) => { exempt.delete(sessionId) }
+      const reasonOf = (sessionId) => exempt.get(sessionId)
+      const ids = () => [...exempt.keys()]
+
+      /* An exemption ends when the host's own snapshot agrees with us. */
+      const graduate = (listIds, archivedIds) => {
+        for (const [sessionId, reason] of [...exempt]) {
+          if (reason === 'born' && listIds.includes(sessionId)) exempt.delete(sessionId)
+          else if (reason === 'returned' && !archivedIds.includes(sessionId)) exempt.delete(sessionId)
+        }
+      }
+
+      /* Which channels survive this snapshot. An empty host list means "not ready yet",
+         and pruning against it would wipe the board on a cold start. */
+      const survivors = (channels, listIds, archivedIds) => {
+        if (channels.length === 0 || listIds.length === 0) return channels
+        return channels.filter((sessionId) => {
+          const reason = exempt.get(sessionId)
+          const known = listIds.includes(sessionId) || reason !== undefined
+          const gone = archivedIds.includes(sessionId) && reason !== 'returned'
+          return known && !gone
+        })
+      }
+
+      /* Widths of Sessions that are really gone — the persisted map must not grow forever.
+         A channel put away with the x keeps its width (the Session still exists), and an
+         exempt id keeps it too: dropping it would silently reset a channel the user just
+         created or just brought back. */
+      const staleWeights = (weights, listIds, archivedIds) => Object.keys(weights).filter((sessionId) => {
+        const reason = exempt.get(sessionId)
+        const archived = archivedIds.includes(sessionId) && reason !== 'returned'
+        const unlisted = listIds.length > 0 && !listIds.includes(sessionId) && reason === undefined
+        return archived || unlisted
+      })
+
+      return { note, forget, reasonOf, ids, graduate, survivors, staleWeights }
+    }
+
+    /**
      * Persist key for the whole board (which Sessions are channels, plus their
      * relative widths), namespaced like ui-sidebar-right's `dsh.sidebar-right.v1`.
      *
@@ -1722,7 +1780,7 @@ window.__ModuleLoader__.load({
         useSessions, useSessionStatus, useWorkspaces, SessionProvider, renderFactorySlot, refFor,
         backToConversation, createSession, archiveSession, unarchiveSession,
         listViews, sidebar, useStore, actions,
-        parkedIds, park, unpark, unparkAll, createdSessions, restoredSessions,
+        parkedIds, park, unpark, unparkAll, ledger,
         soloId, setSolo, clearSolo, mixerRuntime, takePendingFirst,
       } = props
       /* Channels put away with the x live in the PLUGIN scope: not in the persisted
@@ -1805,17 +1863,11 @@ window.__ModuleLoader__.load({
         : []
       const archivedKey = archivedIds.join(',')
       useEffect(() => {
-        /* A Session we created stops being pending the moment its row lands; a Session we
-           just UNARCHIVED stops being exempt once the host stops calling it archived. */
-        for (const id of createdSessions.ids()) if (listIds.includes(id)) createdSessions.forget(id)
-        for (const id of restoredSessions.ids()) if (!archivedIds.includes(id)) restoredSessions.forget(id)
-        if (channels.length === 0 || listIds.length === 0) return
-        const pending = createdSessions.ids()
-        /* `archivedSessionIds` lags behind `unarchiveSession` by a snapshot, and without this
-           exemption the channel the user just brought back would be pruned away again. */
-        const restored = restoredSessions.ids()
-        const alive = channels.filter(id => (listIds.includes(id) || pending.includes(id) || restored.includes(id))
-          && (!archivedIds.includes(id) || restored.includes(id)))
+        /* Two shipped bugs live behind this one call: a channel pruned the instant it was
+           created, and one pruned again right after its archive was undone. The ledger
+           owns both exemptions, so this effect only asks it (spec §4.1). */
+        ledger.graduate(listIds, archivedIds)
+        const alive = ledger.survivors(channels, listIds, archivedIds)
         if (alive.length !== channels.length) actions.setChannels(alive)
       }, [channelsKey, listIdsKey, archivedKey])
 
@@ -1828,9 +1880,7 @@ window.__ModuleLoader__.load({
       const weightIdsKey = weightIds.join(',')
       useEffect(() => {
         if (weightIds.length === 0) return
-        const restored = restoredSessions.ids()
-        const stale = weightIds.filter(id => (archivedIds.includes(id) && !restored.includes(id))
-          || (listIds.length > 0 && !listIds.includes(id)))
+        const stale = ledger.staleWeights(weights, listIds, archivedIds)
         if (stale.length > 0) actions.dropWeights(stale)
       }, [weightIdsKey, listIdsKey, archivedKey])
 
@@ -2002,7 +2052,7 @@ window.__ModuleLoader__.load({
         refFor(sessionId)
         unpark(sessionId)
         /* Until the host list catalogues it, this id is exempt from the prune below. */
-        createdSessions.note(sessionId)
+        ledger.note(sessionId, 'born')
         actions.setChannels(moveChannel(channelsRef.current, sessionId, 0))
         setFocusId(sessionId)
       }
@@ -2116,7 +2166,7 @@ window.__ModuleLoader__.load({
             if (record.index === undefined) return
             /* Keep the prune effect from dropping the restored channel again while the host
                snapshot still calls it archived. */
-            restoredSessions.note(record.sessionId)
+            ledger.note(record.sessionId, 'returned')
             unpark(record.sessionId)
             const next = [...channelsRef.current]
             const at = Math.max(0, Math.min(record.index, next.length))
@@ -2298,6 +2348,7 @@ window.__ModuleLoader__.load({
       runningSubagentCount,
       subagentCatalogOf,
       normalizeBoard,
+      createChannelLedger,
       moveChannel,
       heroFor,
       blankTargetFor,
@@ -2407,29 +2458,16 @@ window.__ModuleLoader__.load({
            created id is briefly absent from it — without this exemption the new channel
            would be pruned away the instant it was added. The panel gets one handle
            rather than the three operations as separate props. */
-        const created = new Set()
-        const createdSessions = {
-          note: (sessionId) => { created.add(sessionId) },
-          forget: (sessionId) => { created.delete(sessionId) },
-          ids: () => [...created],
-        }
-        /* Sessions we just UNARCHIVED. The host's `archivedSessionIds` snapshot lags the
-           `unarchiveSession` promise by a beat, and the panel's prune effect treats a
-           "still archived" id as gone — without this exemption the channel the user just
-           brought back would be removed again immediately (spec §4.1). An id graduates as
-           soon as the snapshot stops calling it archived. */
-        const restored = new Set()
-        const restoredSessions = {
-          note: (sessionId) => { restored.add(sessionId) },
-          forget: (sessionId) => { restored.delete(sessionId) },
-          ids: () => [...restored],
-        }
+        /* Board membership lives in ONE module (spec §4.1): it holds the exemptions that
+           keep a just-created or just-restored channel alive, and it owns the "gone" rule
+           the panel's prune effects consult. Plugin scope, never persisted. */
+        const ledger = createChannelLedger()
 
         /* Shortcuts live in apply scope (registered once, with the plugin) but act on
            React state (which channels exist, which one has the caret). The panel
            publishes those three facts on every render and clears them on unmount, so a
            keypress can never act on a stale list. Same handshake family as
-           `createdSessions` / `takePendingFirst` below. */
+           `ledger` / `takePendingFirst` below. */
         const mixerRuntime = {
           ids: [],
           focus: () => {},
@@ -2526,7 +2564,7 @@ window.__ModuleLoader__.load({
             createSession,
             archiveSession,
             unarchiveSession,
-            restoredSessions,
+            ledger,
             parkedIds,
             soloId,
             setSolo,
@@ -2534,7 +2572,6 @@ window.__ModuleLoader__.load({
             park,
             unpark,
             unparkAll,
-            createdSessions,
             mixerRuntime,
             takePendingFirst,
             sidebar,
