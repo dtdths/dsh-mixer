@@ -679,10 +679,16 @@ test('interaction: a transcript too tall to snapshot becomes a skeleton (§5.3)'
   const transfer = fakeDataTransfer(null)
   act(() => { ui.$$('[data-mixer-head]')[0].dispatchEvent(dragEvent(window, 'dragstart', transfer)) })
   const image = transfer.written.dragImage.element
-  /* Requirement 2 of round 8: the body says "there is a transcript here" with bars
-     instead of going blank, and the overflowing live content is NOT cloned in. */
+  /* Requirement 2 (rounds 8-9): the body says "there is a transcript here" with large
+     blocks that FILL the height plus a composer silhouette at the bottom, and the
+     overflowing live content is NOT cloned in. */
   assert.ok(image.querySelector('[data-mixer-drag-skeleton]') !== null)
   assert.equal(image.querySelector('[data-factory]'), null)
+  assert.equal(image.querySelectorAll('[data-mixer-drag-block]').length, 3)
+  assert.ok(image.querySelector('[data-mixer-drag-composer]') !== null)
+  /* Composer sits last, so the bottom of the picture reads as the input box. */
+  const parts = [...image.querySelector('[data-mixer-drag-skeleton]').children]
+  assert.equal(parts[parts.length - 1].hasAttribute('data-mixer-drag-composer'), true)
   /* The header is still the real one, so the ghost reads as this channel. */
   assert.match(image.textContent, /一号会话/)
 })

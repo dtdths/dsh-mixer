@@ -162,6 +162,12 @@ window.__ModuleLoader__.load({
       fg: 'var(--dsw-alias-label-primary)',
       fg2: 'var(--dsw-alias-label-secondary)',
       warn: 'var(--dsw-alias-state-warn-primary)',
+      /* The host's own placeholder wash. NOT `bg-layer-1/2`: both are plain white in
+         the light theme, so a skeleton painted with them is invisible (spec §5.3).
+         The lines inside a placeholder block need one step more contrast; `border-l2` is
+         the neutral alpha the host already ships for that (10% black / 12% white). */
+      skeleton: 'var(--dsw-alias-bg-skeleton)',
+      skeletonLine: 'var(--dsw-alias-border-l2)',
       /* The host's focus colour (ui-theme focus.css falls back to this). */
       business: 'var(--dsw-alias-state-business-primary)',
     }
@@ -1144,37 +1150,71 @@ window.__ModuleLoader__.load({
 
     /**
      * The stand-in body for a channel whose transcript cannot be snapshotted (see
-     * buildDragGhost): message-shaped bars plus the composer's silhouette, both host
-     * tokens. Static on purpose — a drag image is one frame, so a pulsing skeleton
-     * would promise motion it will never have.
+     * buildDragGhost): LARGE content blocks that fill the height above a composer
+     * silhouette, all in host tokens.
+     *
+     * The rules come from the browser feedback (2026-10-20, rounds 8-9):
+     *   - it must FILL the body — a couple of thin lines at the top reads as a broken
+     *     picture, not as "this channel has a transcript";
+     *   - each block carries a few text lines, so the blocks read as message groups and
+     *     not as blank cards;
+     *   - the composer has to be at the bottom and be recognisable (an input line over a
+     *     row of toolbar chips), because every channel in the mixer has one.
+     * Painted with `--dsw-alias-bg-skeleton` / `--dsw-alias-border-l2`, the tokens the
+     * host itself uses for placeholders: `bg-layer-1/2` are both WHITE in the light
+     * theme, which is why the first version of this skeleton was invisible.
+     * Static on purpose: a drag image is one frame, so a pulsing skeleton would promise
+     * motion it will never have.
      */
     function buildDragSkeleton(doc) {
-      const bar = (width, edge) => {
+      const bar = (style) => {
         const node = doc.createElement('div')
-        Object.assign(node.style, {
-          flex: '0 0 9px', width: `${width}%`, alignSelf: edge,
-          borderRadius: `${PILL}px`, background: T.l1,
-        })
+        Object.assign(node.style, { borderRadius: `${PILL}px`, background: T.skeleton }, style)
         return node
       }
       const body = doc.createElement('div')
       Object.assign(body.style, {
         flex: '1 1 auto', minHeight: 0, display: 'flex', flexDirection: 'column',
-        gap: '9px', padding: '16px 18px', overflow: 'hidden', background: T.base,
+        gap: '12px', padding: '16px 18px', overflow: 'hidden', background: T.base,
       })
       body.setAttribute('data-mixer-drag-skeleton', '')
-      for (const [width, edge] of [[62, 'flex-start'], [78, 'flex-end'], [46, 'flex-start'], [68, 'flex-end']]) {
-        body.appendChild(bar(width, edge))
+      /* Big blocks, sized like message groups: with a zero basis they share whatever
+         height the channel has, so the picture never leaves a hole in the middle. */
+      for (const [grow, width, edge, lines] of [
+        [3, '100%', 'stretch', [92, 78, 55]],
+        [2.2, '86%', 'flex-end', [88, 62]],
+        [1.6, '64%', 'flex-start', [72, 46]],
+      ]) {
+        const area = doc.createElement('div')
+        area.setAttribute('data-mixer-drag-block', '')
+        Object.assign(area.style, {
+          flex: `${grow} 1 0`, width, alignSelf: edge, minHeight: 0,
+          display: 'flex', flexDirection: 'column', justifyContent: 'center', gap: '9px',
+          padding: '16px', borderRadius: 'var(--dsw-radius-panel)',
+          /* border-box matters: the widths below are percentages of the body. */
+          boxSizing: 'border-box',
+          background: T.skeleton, overflow: 'hidden',
+        })
+        for (const lineWidth of lines) {
+          area.appendChild(bar({ flex: '0 0 10px', width: `${lineWidth}%`, background: T.skeletonLine }))
+        }
+        body.appendChild(area)
       }
-      const spacer = doc.createElement('div')
-      spacer.style.flex = '1 1 auto'
-      body.appendChild(spacer)
+      /* The composer's silhouette: input line over a row of toolbar chips. */
       const composer = doc.createElement('div')
+      composer.setAttribute('data-mixer-drag-composer', '')
       Object.assign(composer.style, {
-        flex: '0 0 auto', padding: '14px', border: `1px solid ${T.b1}`,
-        borderRadius: 'var(--dsw-radius-panel)',
+        flex: '0 0 auto', display: 'flex', flexDirection: 'column', gap: '10px',
+        padding: '12px 14px', border: `1px solid ${T.b2}`,
+        borderRadius: 'var(--dsw-radius-panel)', background: T.base,
       })
-      composer.appendChild(bar(46, 'flex-start'))
+      composer.appendChild(bar({ flex: '0 0 8px', width: '46%' }))
+      const toolbar = doc.createElement('div')
+      Object.assign(toolbar.style, { display: 'flex', gap: '6px' })
+      for (const chipWidth of [26, 40, 34]) {
+        toolbar.appendChild(bar({ width: `${chipWidth}px`, height: '8px' }))
+      }
+      composer.appendChild(toolbar)
       body.appendChild(composer)
       return body
     }
