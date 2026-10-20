@@ -182,10 +182,13 @@ export function createHost(definition, { viewEntries = DEFAULT_VIEW_ENTRIES } = 
   const selectPanelCalls = []
   const createCalls = []
   const archiveCalls = []
+  const unarchiveCalls = []
   let createFailure
   let archiveFailure
   let archiveThrows
   let archiveDelayMs = 0
+  let unarchiveFailure
+  let unarchiveThrows
   const listListeners = new Set()
   const panelListeners = new Set()
   const disposers = []
@@ -264,6 +267,14 @@ export function createHost(definition, { viewEntries = DEFAULT_VIEW_ENTRIES } = 
         if (archiveFailure !== undefined) return Promise.reject(archiveFailure)
         return Promise.resolve()
       },
+      /* The undo half of the same service (`undoArchive: unarchiveSession`,
+         ui-workspace index.ts:228). */
+      unarchiveSession: (sessionId) => {
+        unarchiveCalls.push(sessionId)
+        if (unarchiveThrows !== undefined) throw unarchiveThrows
+        if (unarchiveFailure !== undefined) return Promise.reject(unarchiveFailure)
+        return Promise.resolve()
+      },
     },
   }
   definition.apply(ctx)
@@ -271,11 +282,13 @@ export function createHost(definition, { viewEntries = DEFAULT_VIEW_ENTRIES } = 
   if (main === undefined) throw new Error('main panel was not registered')
   return {
     registrations, commands, ctx, retained, released, main,
-    selectPanelCalls, createCalls, archiveCalls, setList, setPanelInfo,
+    selectPanelCalls, createCalls, archiveCalls, unarchiveCalls, setList, setPanelInfo,
     setCreateFailure: (error) => { createFailure = error },
     setArchiveFailure: (error) => { archiveFailure = error },
     setArchiveThrow: (error) => { archiveThrows = error },
     setArchiveDelay: (ms) => { archiveDelayMs = ms },
+    setUnarchiveFailure: (error) => { unarchiveFailure = error },
+    setUnarchiveThrow: (error) => { unarchiveThrows = error },
     panelInfo: () => panelInfoState,
     dispose: () => { for (const dispose of disposers) dispose() },
   }

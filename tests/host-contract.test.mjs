@@ -168,3 +168,19 @@ test('host contract: the turn navigator is still hidden by a container query we 
   assert.match(navigator, /@container \(max-width: 900px\)/, 'the host breakpoint moved: RAIL_MIN_PANE_W needs re-deriving')
   assert.match(navigator, /container-type: inline-size/, 'the rail no longer establishes the container our @container rule targets')
 })
+
+test('host contract: the archive-undo we mirror still exists, with the same hold', () => {
+  /* Our undo chip calls the same service method the sidebar's archived toast does
+     (`undoArchive: unarchiveSession`), and holds the offer for the same 6 s. */
+  const navigation = read('packages/client/ui-workspace/src/client/navigation.ts')
+  assert.match(navigation, /unarchiveSession\(sessionId: SessionId\): Promise<void>/,
+    'uiWorkspace.unarchiveSession moved: the mixer undo chip has nothing to call')
+  const index = read('packages/client/ui-workspace/src/client/index.ts')
+  assert.match(index, /undoArchive: unarchiveSession/,
+    'the sidebar undo no longer maps to unarchiveSession: the mixer would drift from the host action')
+  const toast = read('packages/client/ui-workspace/src/client/session-actions/RowActionToast.tsx')
+  assert.match(toast, /LONG_TOAST_HOLD_MS = 6000/,
+    'the archived-toast hold moved: ARCHIVE_UNDO_MS mirrors this number')
+  const locales = read('packages/client/ui-workspace/src/client/locales.ts')
+  assert.match(locales, /'toast\.archivedUndo': '撤销'/, 'the host undo wording moved')
+})

@@ -143,6 +143,12 @@ window.__ModuleLoader__.load({
      */
     const HERO_LIFT_PX = 48
     /**
+     * How long the bar offers to undo an archive (spec §5.2). Mirrors the host's own
+     * hold for the archived toast (`LONG_TOAST_HOLD_MS = 6000` in ui-workspace's
+     * `RowActionToast`), so the sidebar and the mixer promise the same window.
+     */
+    const ARCHIVE_UNDO_MS = 6000
+    /**
      * Persist key for the whole board (which Sessions are channels, plus their
      * relative widths), namespaced like ui-sidebar-right's `dsh.sidebar-right.v1`.
      *
@@ -521,6 +527,13 @@ window.__ModuleLoader__.load({
         flex: '0 0 auto', display: 'inline-flex', alignItems: 'center', gap: 6,
         padding: '2px 8px', borderRadius: PILL, background: T.l2,
         border: `1px solid ${T.b1}`, color: T.fg2, font: `11.5px/1.8 ${SANS}`,
+      },
+      /* An action inside a chip (the archive undo): text-only, so the chip stays one
+         object instead of growing a second surface (spec §5.2). */
+      chipButton: {
+        flex: '0 0 auto', padding: 0, border: 'none', background: 'transparent',
+        color: T.fg, fontWeight: 600, cursor: 'pointer', textDecoration: 'underline',
+        font: `11.5px/1.8 ${SANS}`,
       },
       dot: { width: 7, height: 7, borderRadius: PILL, background: T.warn, flex: '0 0 auto' },
       ddWrap: { position: 'relative' },
@@ -919,6 +932,7 @@ window.__ModuleLoader__.load({
         attention, backToConversation,
         workspaces, sessions,
         onToggleChannel, onNewSession, onPanelOpened, notice,
+        undoArchive, onUndoArchive,
         archived, onArchive, onStopAndArchive, archiveConfirm, archivePending, onDismissArchive,
       } = props
       const [panelOpen, setPanelOpen] = useState(false)
@@ -980,6 +994,24 @@ window.__ModuleLoader__.load({
               title: '详情在控制台',
               'data-mixer-notice': '',
             }, notice),
+        /* Archive is destructive and normally one-way; for ARCHIVE_UNDO_MS the bar carries
+           the same offer the sidebar's archived toast does (spec §5.2, issue #12). */
+        undoArchive === undefined
+          ? null
+          : h('span', {
+              style: { ...CSS.chip, borderColor: T.b2, color: T.fg, maxWidth: 280 },
+              title: `可以在 ${ARCHIVE_UNDO_MS / 1000} 秒内撤销这次归档`,
+              'data-mixer-undo-archive': undoArchive.sessionId,
+            },
+              h('span', { style: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } },
+                `已归档「${undoArchive.title}」`),
+              h('button', {
+                type: 'button',
+                style: CSS.chipButton,
+                'data-mixer-undo-archive-do': '',
+                title: '撤销这次归档（与侧边栏归档提示里的「撤销」是同一个动作）',
+                onClick: onUndoArchive,
+              }, '撤销')),
         hiddenCount > 0
           ? h('button', {
               style: CSS.chip,
@@ -1559,8 +1591,9 @@ window.__ModuleLoader__.load({
     function MixerPanel(props) {
       const {
         useSessions, useSessionStatus, useWorkspaces, SessionProvider, renderFactorySlot, refFor,
-        backToConversation, createSession, archiveSession, listViews, sidebar, useStore, actions,
-        parkedIds, park, unpark, unparkAll, createdSessions, takePendingFirst,
+        backToConversation, createSession, archiveSession, unarchiveSession,
+        listViews, sidebar, useStore, actions,
+        parkedIds, park, unpark, unparkAll, createdSessions, restoredSessions, takePendingFirst,
       } = props
       /* Channels put away with the x live in the PLUGIN scope: not in the persisted
          board ("put away for now" is about this sitting, not a preference) and not in
@@ -1580,6 +1613,8 @@ window.__ModuleLoader__.load({
       /* The row whose archive call is in flight, so the action shows 归档中… instead of
          looking like a click that did nothing. */
       const [archivePending, setArchivePending] = useState(undefined)
+      /* The archive the bar is currently offering to undo (spec §5.2, issue #12). */
+      const [undoArchive, setUndoArchive] = useState(undefined)
       /* "Insert this Session first" is handed over by the apply-scope reclaim watcher:
          the panel those channels belonged to has just been unmounted. */
       const pendingRef = useRef(null)
@@ -1592,6 +1627,8 @@ window.__ModuleLoader__.load({
          stale order and silently drop anything the user toggled in between. */
       const channelsRef = useRef(channels)
       channelsRef.current = channels
+      const weightsRef = useRef(weights)
+      weightsRef.current = weights
       /* Channels are ours (spec §4.1): until the user owns a board we show the first
          few Sessions, then the dropdown and the per-pane close button own the set. */
       const list = useSessions(state => state)
@@ -1623,12 +1660,17 @@ window.__ModuleLoader__.load({
         : []
       const archivedKey = archivedIds.join(',')
       useEffect(() => {
-        /* A Session we created stops being pending the moment its row lands. */
+        /* A Session we created stops being pending the moment its row lands; a Session we
+           just UNARCHIVED stops being exempt once the host stops calling it archived. */
         for (const id of createdSessions.ids()) if (listIds.includes(id)) createdSessions.forget(id)
+        for (const id of restoredSessions.ids()) if (!archivedIds.includes(id)) restoredSessions.forget(id)
         if (channels.length === 0 || listIds.length === 0) return
         const pending = createdSessions.ids()
-        const alive = channels.filter(id => (listIds.includes(id) || pending.includes(id))
-          && !archivedIds.includes(id))
+        /* `archivedSessionIds` lags behind `unarchiveSession` by a snapshot, and without this
+           exemption the channel the user just brought back would be pruned away again. */
+        const restored = restoredSessions.ids()
+        const alive = channels.filter(id => (listIds.includes(id) || pending.includes(id) || restored.includes(id))
+          && (!archivedIds.includes(id) || restored.includes(id)))
         if (alive.length !== channels.length) actions.setChannels(alive)
       }, [channelsKey, listIdsKey, archivedKey])
 
@@ -1641,10 +1683,19 @@ window.__ModuleLoader__.load({
       const weightIdsKey = weightIds.join(',')
       useEffect(() => {
         if (weightIds.length === 0) return
-        const stale = weightIds.filter(id => archivedIds.includes(id)
+        const restored = restoredSessions.ids()
+        const stale = weightIds.filter(id => (archivedIds.includes(id) && !restored.includes(id))
           || (listIds.length > 0 && !listIds.includes(id)))
         if (stale.length > 0) actions.dropWeights(stale)
       }, [weightIdsKey, listIdsKey, archivedKey])
+
+      /* The undo offer lives for ARCHIVE_UNDO_MS, like the host's archived toast: a stale
+         offer is worse than none, because the Session may have been archived again since. */
+      useEffect(() => {
+        if (undoArchive === undefined) return undefined
+        const timer = setTimeout(() => setUndoArchive(undefined), ARCHIVE_UNDO_MS)
+        return () => clearTimeout(timer)
+      }, [undoArchive])
 
       /* The reclaim path remounts this panel (ADR-0003), so "the new Session goes
          first" cannot travel in component state: the apply-scope watcher hands it
@@ -1803,6 +1854,19 @@ window.__ModuleLoader__.load({
         setArchivePending(sessionId)
         runArchive(sessionId, { stopActivity: true })
       }
+      /* Archive is destructive and one-way by default; the bar offers the same 6 s undo
+         the sidebar's archived toast does (spec §5.2, issue #12). Enough is remembered to
+         put the channel back exactly where it was, width included. */
+      const noteArchiveUndo = (sessionId) => {
+        const index = currentBoard.indexOf(sessionId)
+        const summary = summaries[sessionId]
+        setUndoArchive({
+          sessionId,
+          title: summary === undefined ? sessionId.slice(0, 8) : summary.displayTitle,
+          index: index === -1 ? undefined : index,
+          weight: weights[sessionId],
+        })
+      }
       const runArchive = (sessionId, options) => {
         let attempt
         try {
@@ -1814,7 +1878,7 @@ window.__ModuleLoader__.load({
           return
         }
         Promise.resolve(attempt).then(
-          () => { setArchivePending(undefined) },
+          () => { setArchivePending(undefined); noteArchiveUndo(sessionId) },
           (reason) => {
             setArchivePending(undefined)
             /* A follow-up "stop and archive" failure is a plain failure: asking again
@@ -1825,6 +1889,47 @@ window.__ModuleLoader__.load({
               return
             }
             setArchiveConfirm({ sessionId })
+          },
+        )
+      }
+      /* Undo = the host's own `unarchiveSession` (the exact call the sidebar's archived
+         toast makes through `undoArchive`), then put the channel back. A failed undo must
+         be visible: the chip is gone by then, so the bar's notice takes over — the same
+         "a click that only logs is a dead click" rule as for archive. */
+      const undoArchivedChannel = () => {
+        const record = undoArchive
+        if (record === undefined) return
+        setUndoArchive(undefined)
+        if (typeof unarchiveSession !== 'function') {
+          setNotice('撤销归档不可用：宿主没有提供 unarchiveSession')
+          return
+        }
+        let attempt
+        try {
+          attempt = unarchiveSession(record.sessionId)
+        } catch (error) {
+          console.error('[mixer] unarchive call threw', error)
+          setNotice(`撤销归档失败：${errorText(error)}`)
+          return
+        }
+        Promise.resolve(attempt).then(
+          () => {
+            if (record.index === undefined) return
+            /* Keep the prune effect from dropping the restored channel again while the host
+               snapshot still calls it archived. */
+            restoredSessions.note(record.sessionId)
+            unpark(record.sessionId)
+            const next = [...channelsRef.current]
+            const at = Math.max(0, Math.min(record.index, next.length))
+            next.splice(at, 0, record.sessionId)
+            actions.setChannels(next)
+            if (record.weight !== undefined) {
+              actions.setWeights({ ...weightsRef.current, [record.sessionId]: record.weight })
+            }
+          },
+          (reason) => {
+            console.error('[mixer] unarchive rejected', reason)
+            setNotice(`撤销归档失败：${errorText(reason)}`)
           },
         )
       }
@@ -1919,6 +2024,8 @@ window.__ModuleLoader__.load({
           archiveConfirm: archiveConfirm === undefined ? undefined : archiveConfirm.sessionId,
           archivePending,
           onDismissArchive: () => setArchiveConfirm(undefined),
+          undoArchive,
+          onUndoArchive: undoArchivedChannel,
           notice,
         }),
         visible.length === 0
@@ -2067,6 +2174,11 @@ window.__ModuleLoader__.load({
          * comes free, because the archive lands in the workspaces snapshot (spec §4.1).
          */
         const archiveSession = (sessionId, options) => ctx.uiWorkspace.archiveSession(sessionId, options)
+        /* The host's own unarchive call — the sidebar's archived-toast `undoArchive` uses
+           exactly this service method (ui-workspace `index.ts:228`). Called only from the
+           undo chip, so a missing method is reported to the user instead of reaching
+           Cordis' "without inject" failure path. */
+        const unarchiveSession = (sessionId) => ctx.uiWorkspace.unarchiveSession(sessionId)
 
         /* "Put away with the x" is plugin-scope state: it must outlive a panel
            remount (ADR-0003) without ever being persisted (spec §5.3). */
@@ -2086,6 +2198,17 @@ window.__ModuleLoader__.load({
           note: (sessionId) => { created.add(sessionId) },
           forget: (sessionId) => { created.delete(sessionId) },
           ids: () => [...created],
+        }
+        /* Sessions we just UNARCHIVED. The host's `archivedSessionIds` snapshot lags the
+           `unarchiveSession` promise by a beat, and the panel's prune effect treats a
+           "still archived" id as gone — without this exemption the channel the user just
+           brought back would be removed again immediately (spec §4.1). An id graduates as
+           soon as the snapshot stops calling it archived. */
+        const restored = new Set()
+        const restoredSessions = {
+          note: (sessionId) => { restored.add(sessionId) },
+          forget: (sessionId) => { restored.delete(sessionId) },
+          ids: () => [...restored],
         }
 
         /* The reclaim handshake: the panel is about to be unmounted, so "this Session
@@ -2176,6 +2299,8 @@ window.__ModuleLoader__.load({
             backToConversation: () => ctx.layout.selectPanel('conversation'),
             createSession,
             archiveSession,
+            unarchiveSession,
+            restoredSessions,
             parkedIds,
             park,
             unpark,

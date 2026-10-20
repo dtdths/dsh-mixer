@@ -490,6 +490,101 @@ test('interaction: an in-flight archive shows 归档中… instead of looking in
   assert.equal(ui.$('[data-mixer-archive="s2"]').textContent, '归档')
 })
 
+test('interaction: an archive can be undone from the bar, back where it was (§5.2)', async () => {
+  const ui = await loadInteractive()
+  /* s2 is the second channel and has a width of its own: both must come back. */
+  ui.draw({ board: { channels: ['s1', 's2'], weights: { s2: 2 } }, list, status, workspaces })
+  const { act, window } = ui
+  const hover = (element, type) => act(() => { element.dispatchEvent(new window.MouseEvent(type, { bubbles: true })) })
+  act(() => { ui.$('[data-mixer-sessions]').dispatchEvent(new window.MouseEvent('click', { bubbles: true })) })
+  hover(ui.$('[data-mixer-session="s2"]'), 'mouseover')
+  await act(async () => {
+    ui.$('[data-mixer-archive="s2"]').dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+    await new Promise(resolve => setTimeout(resolve, 0))
+  })
+  assert.deepEqual(ui.host.archiveCalls, [{ sessionId: 's2', options: undefined }])
+  /* The bar offers the same undo the sidebar's archived toast does. */
+  assert.match(ui.$('[data-mixer-undo-archive="s2"]').textContent, /已归档「二号会话」/)
+  assert.ok(ui.$('[data-mixer-undo-archive-do]') !== null)
+
+  /* The host snapshot catches up: §4.1 prunes the channel… */
+  ui.draw({ workspaces: { ...workspaces, archivedSessionIds: ['s2'] } })
+  assert.deepEqual(ui.instance.getSnapshot().channels, ['s1'])
+
+  /* …and the undo brings the Session AND the channel back where they were, width too —
+     even though this snapshot still calls it archived (the "just restored" exemption). */
+  await act(async () => {
+    ui.$('[data-mixer-undo-archive-do]').dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+    await new Promise(resolve => setTimeout(resolve, 0))
+  })
+  assert.deepEqual(ui.host.unarchiveCalls, ['s2'])
+  assert.deepEqual(ui.instance.getSnapshot().channels, ['s1', 's2'])
+  assert.equal(ui.instance.getSnapshot().weights.s2, 2)
+  assert.equal(ui.$('[data-mixer-undo-archive="s2"]'), null)
+})
+
+test('interaction: a refused or unavailable undo says so, never a dead chip (§5.2)', async () => {
+  /* The host refuses the unarchive. */
+  const ui = await mountTwo()
+  const { act, window } = ui
+  const hover = (element, type) => act(() => { element.dispatchEvent(new window.MouseEvent(type, { bubbles: true })) })
+  act(() => { ui.$('[data-mixer-sessions]').dispatchEvent(new window.MouseEvent('click', { bubbles: true })) })
+  hover(ui.$('[data-mixer-session="s2"]'), 'mouseover')
+  await act(async () => {
+    ui.$('[data-mixer-archive="s2"]').dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+    await new Promise(resolve => setTimeout(resolve, 0))
+  })
+  ui.host.setUnarchiveFailure(new Error('unarchive rejected'))
+  await act(async () => {
+    ui.$('[data-mixer-undo-archive-do]').dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+    await new Promise(resolve => setTimeout(resolve, 0))
+  })
+  assert.match(ui.$('[data-mixer-notice]').textContent, /撤销归档失败：unarchive rejected/)
+  assert.equal(ui.$('[data-mixer-undo-archive="s2"]'), null)
+
+  /* And a host that never provided the method is named, not silently dead. */
+  const stripped = await loadInteractive()
+  stripped.draw({ board: { channels: ['s1', 's2'], weights: {} }, list, status, workspaces })
+  const strip = stripped
+  const doHover = (element, type) => act(() => { element.dispatchEvent(new window.MouseEvent(type, { bubbles: true })) })
+  act(() => { strip.$('[data-mixer-sessions]').dispatchEvent(new window.MouseEvent('click', { bubbles: true })) })
+  doHover(strip.$('[data-mixer-session="s2"]'), 'mouseover')
+  await act(async () => {
+    strip.$('[data-mixer-archive="s2"]').dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+    await new Promise(resolve => setTimeout(resolve, 0))
+  })
+  const injected = strip.host.main.options.inject()
+  delete injected.unarchiveSession
+  strip.host.main.options.inject = () => injected
+  strip.draw({})
+  await act(async () => {
+    strip.$('[data-mixer-undo-archive-do]').dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+    await new Promise(resolve => setTimeout(resolve, 0))
+  })
+  assert.match(strip.$('[data-mixer-notice]').textContent, /没有提供 unarchiveSession/)
+})
+
+test('interaction: only the latest archive is offered for undo (§5.2)', async () => {
+  const ui = await mountTwo()
+  const { act, window } = ui
+  const hover = (element, type) => act(() => { element.dispatchEvent(new window.MouseEvent(type, { bubbles: true })) })
+  act(() => { ui.$('[data-mixer-sessions]').dispatchEvent(new window.MouseEvent('click', { bubbles: true })) })
+  hover(ui.$('[data-mixer-session="s2"]'), 'mouseover')
+  await act(async () => {
+    ui.$('[data-mixer-archive="s2"]').dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+    await new Promise(resolve => setTimeout(resolve, 0))
+  })
+  assert.ok(ui.$('[data-mixer-undo-archive="s2"]') !== null)
+  /* One offer at a time, like the host's single toast. */
+  hover(ui.$('[data-mixer-session="s3"]'), 'mouseover')
+  await act(async () => {
+    ui.$('[data-mixer-archive="s3"]').dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+    await new Promise(resolve => setTimeout(resolve, 0))
+  })
+  assert.ok(ui.$('[data-mixer-undo-archive="s3"]') !== null)
+  assert.equal(ui.$('[data-mixer-undo-archive="s2"]'), null)
+})
+
 test('interaction: a view tab pins the view through the factory seam (§4.4)', async () => {
   const ui = await mountTwo()
   const { act, window } = ui
