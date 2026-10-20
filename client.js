@@ -809,6 +809,7 @@ window.__ModuleLoader__.load({
                           type: 'button',
                           style: CSS.rowAction,
                           'data-mixer-new': workspace.workspaceId,
+                          'data-mixer-row-action': '',
                           title: `在 ${workspace.title} 新建会话并放到第一位`,
                           onClick: (event) => {
                             event.stopPropagation()
@@ -876,6 +877,7 @@ window.__ModuleLoader__.load({
                                         ? { ...CSS.rowAction, ...CSS.rowActionPending }
                                         : CSS.rowAction,
                                       'data-mixer-archive': sessionId,
+                                      'data-mixer-row-action': '',
                                       disabled: archivePending === sessionId,
                                       title: '归档这个会话（与侧边栏的归档一致；正在执行的会话会先问一次）',
                                       onClick: () => onArchive(sessionId),
@@ -888,11 +890,13 @@ window.__ModuleLoader__.load({
                                     h('button', {
                                       style: { ...CSS.rowAction, ...CSS.rowActionPrimary },
                                       'data-mixer-archive-stop': sessionId,
+                                      'data-mixer-row-action': '',
                                       onClick: () => onStopAndArchive(sessionId),
                                     }, '停止并归档'),
                                     h('button', {
                                       style: CSS.rowAction,
                                       'data-mixer-archive-cancel': sessionId,
+                                      'data-mixer-row-action': '',
                                       onClick: onDismissArchive,
                                     }, '取消'),
                                   )
@@ -1873,6 +1877,23 @@ window.__ModuleLoader__.load({
           '[data-mixer-pane] [data-content-phase="hero"] [data-composer-seat],'
           + '[data-mixer-drag-ghost] [data-content-phase="hero"] [data-composer-seat]{'
           + `margin-bottom:${HERO_LIFT_PX}px}`),
+        /* The row actions (＋会话 / 归档 / 停止并归档) are inline-styled — this plugin has
+           no stylesheet — and inline styles cannot express `:hover` / `:focus-visible`, so
+           one injected rule owns those two states. `!important` is how a rule beats the
+           inline resting surface; without the rule the buttons keep it, so a host that
+           drops the style only loses the states, not the look.
+           Hover uses the host's ACCENT wash (`interactive-bg-hover-accent`: 14% ink in the
+           light theme, 24% white in the dark one) rather than `button-floating-hover`,
+           which only shifts by a couple of percent — on a chip this small that is
+           indistinguishable from the row's own hover wash (user feedback 2026-10-20:
+           「按钮 hover 能否更高亮些」). Resting stays `button-elevated-fill`, so the pair
+           still reads as "row hovered" vs "button hovered". */
+        h('style', { key: 'mixer-row-action-states' },
+          '[data-mixer-row-action]:hover{'
+          + 'background:var(--dsw-alias-interactive-bg-hover-accent)!important;'
+          + 'border-color:var(--dsw-alias-border-l3)!important}'
+          + '[data-mixer-row-action]:focus-visible{'
+          + 'outline:2px solid var(--dsw-alias-state-business-primary);outline-offset:0}'),
         h(TopBar, {
           channels: visible,
           hiddenCount: parked.length,

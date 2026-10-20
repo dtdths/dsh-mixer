@@ -172,8 +172,18 @@ test('interaction: a workspace row jumps the right column and creates in that wo
 
   /* Its own action creates in THAT workspace, first in the channel row. */
   hover(w2)
+  const action = ui.$('[data-mixer-new="w2"]')
+  assert.ok(action !== null)
+  /* The button carries its OWN hover state, so "the pointer is on the button" reads
+     differently from "the row under it is hovered": inline styles cannot express that, so
+     one injected rule owns both states (2026-10-20). */
+  assert.equal(action.getAttribute('data-mixer-row-action'), '')
+  const states = [...ui.document.querySelectorAll('style')]
+    .map(node => node.textContent === null ? '' : node.textContent).join('\n')
+  assert.match(states, /\[data-mixer-row-action\]:hover/)
+  assert.match(states, /interactive-bg-hover-accent/)
   await act(async () => {
-    ui.$('[data-mixer-new="w2"]').dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+    action.dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
     await new Promise(resolve => setTimeout(resolve, 0))
   })
   assert.deepEqual(ui.host.createCalls, [{ workspaceId: 'w2' }])
