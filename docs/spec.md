@@ -16,7 +16,7 @@
 - 语音 / 多媒体通道。
 - **UI 文案接 locale 服务**（用户 2026-10-15 定：留作二期）。本期文案硬编码中文，见 §9。
 
-**交付形态**：只装 Client half，**不发布 npm**（`package.json` 是 `private: true`）。三条安装路径：仓库目录 `link:`（开发、热更新）/ git tag `github:dtdths/dsh-mixer#vN.N.N`（冻结版本）/ `.tgz`（离线）。**v1 已发 `v1.0.0`**：`main` 与 `feat/mixer-v1` 同点，GitHub Release 里有安装命令与验证过的 DSH runtime 版本；步骤见 `README.md`「安装」「发布」。
+**交付形态**：只装 Client half，**不发布 npm**（`package.json` 是 `private: true`）。三条安装路径：仓库目录 `link:`（开发、热更新）/ git tag `github:dtdths/dsh-mixer#vN.N.N`（冻结版本）/ `.tgz`（离线）。**当前发布版 `v1.1.0`**（首个正式版是 `v1.0.0`）：`main` 与 `feat/mixer-v1` 同点，GitHub Release 里有安装命令与验证过的 DSH runtime 版本；步骤见 `README.md`「安装」「发布」。
 
 ## 2. 包结构
 
@@ -560,7 +560,9 @@ DSH_REPO=/新的/checkout 路径 npm run check
 
 **第三至六轮（浏览器实测 → 修复）的验收记录（2026-10-15）**：用户在浏览器里逐轮实测并回报。**已确认可用**：§6.17 顶栏可读性、§6.18 浮层跳转、§6.19 归档过滤、§6.20 面板内归档（含"正在执行先问一次"）—— 最后一轮修掉了 `uiWorkspace` 缺失的**服务边**（见 §9.0c 第 6 行），用户复测「正常了」。
 
-**发布（2026-10-20）**：`package.json` bump 到 `1.0.0`，`main` fast-forward 到与 `feat/mixer-v1` 同点，打 annotated tag **`v1.0.0`**，GitHub Release 附安装命令（`install_bundle target = "github:dtdths/dsh-mixer#v1.0.0"`）与验证过的 DSH runtime 版本（`0.2.1-alpha.1` / checkout `5badb15`）。发版前 `npm run check` = 79 用例 + 冷启动 `PASS`。
+**发布 v1.0.0（2026-10-20）**：`package.json` bump 到 `1.0.0`，`main` fast-forward 到与 `feat/mixer-v1` 同点，打 annotated tag **`v1.0.0`**，GitHub Release 附安装命令（`install_bundle target = "github:dtdths/dsh-mixer#v1.0.0"`）与验证过的 DSH runtime 版本（`0.2.1-alpha.1` / checkout `5badb15`）。发版前 `npm run check` = 79 用例 + 冷启动 `PASS`。
+
+**发布 v1.1.0（2026-10-20，发布后一轮交互改版）**：`package.json` bump 到 `1.1.0`，`main` fast-forward 到本点，tag **`v1.1.0`** + GitHub Release。内容：`会话` 浮层的新建入口挪进左列每个工作区行（hover 出 `＋会话`，§9.0f 第 1–2 行）、左列行 hover 与行内动作按钮的平常/hover 两态改用可见 token（§9.0f 第 3–4 行）；`npm run check` = 78 用例 + 冷启动 `PASS`，用户浏览器逐项验收通过。
 
 **第十一轮（2026-10-20，发布后的交互改版）**：`npm run check` = **78 个用例 + 冷启动 `PASS`**（−1 是因为 `landingWorkspace` 缝随「新建落点」一起退休）。改动是「新建入口挪进左列工作区行 + hover 态可见」（§5.2 / §9.0f），**待用户浏览器验收**；验收通过后再决定是否发 v1.1.0。
 
