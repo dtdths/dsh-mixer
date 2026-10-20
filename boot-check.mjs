@@ -206,7 +206,7 @@ for (const [label, outcome] of [['without ui-primitives', results.boot_without_p
 const expectedShortcuts = [
   'mixer.channel.1', 'mixer.channel.2', 'mixer.channel.3', 'mixer.channel.4', 'mixer.channel.5',
   'mixer.channel.6', 'mixer.channel.7', 'mixer.channel.8', 'mixer.channel.9',
-  'mixer.channel.next', 'mixer.channel.prev',
+  'mixer.channel.next', 'mixer.channel.prev', 'mixer.channel.solo',
 ]
 const registeredShortcuts = results.cold_boot_without_commandUi.shortcuts
 for (const id of expectedShortcuts) {

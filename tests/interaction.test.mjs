@@ -643,6 +643,77 @@ test('interaction: jumping with no channels is blocked, not dead (§5.6)', async
   assert.match(resolution.reason, /还没有通道/)
 })
 
+test('interaction: solo folds the other channels into strips and exits cleanly (§5.7)', async () => {
+  const ui = await loadInteractive()
+  /* Two channels with different widths: solo must not touch the persisted weights. */
+  ui.draw({ board: { channels: ['s1', 's2'], weights: { s1: 2, s2: 1 } }, list, status, workspaces })
+  const { act, window } = ui
+  const click = element => act(() => { element.dispatchEvent(new window.MouseEvent('click', { bubbles: true })) })
+
+  /* Enter from the channel head. */
+  click(ui.$('[data-mixer-solo="s1"]'))
+  const strips = ui.$$('[data-mixer-strip]')
+  assert.deepEqual(strips.map(node => node.getAttribute('data-mixer-strip')), ['s2'])
+  /* The soloed channel keeps its composer; the folded one is only a strip. */
+  assert.ok(ui.$('[data-mixer-pane="s1"]') !== null)
+  assert.equal(ui.$('[data-mixer-pane="s2"]'), null)
+  assert.equal(ui.$('[data-mixer-strip="s2"]').querySelector('[data-factory]'), null)
+  /* Dividers are suspended while solo lasts. */
+  assert.equal(ui.$('[data-mixer-resizer]'), null)
+  /* The bar offers the way out (Escape is the host's stop-turn key, so it is not used). */
+  assert.match(ui.$('[data-mixer-solo-bar]').textContent, /solo：一号会话/)
+
+  /* Clicking a strip solos THAT channel instead. */
+  click(ui.$('[data-mixer-strip="s2"]'))
+  assert.deepEqual(ui.$$('[data-mixer-strip]').map(node => node.getAttribute('data-mixer-strip')), ['s1'])
+  assert.ok(ui.$('[data-mixer-pane="s2"]') !== null)
+
+  /* Exit restores the side-by-side layout and the weights are untouched. */
+  click(ui.$('[data-mixer-solo-exit]'))
+  assert.deepEqual(ui.$$('[data-mixer-strip]'), [])
+  assert.ok(ui.$('[data-mixer-pane="s1"]') !== null && ui.$('[data-mixer-pane="s2"]') !== null)
+  assert.deepEqual(ui.instance.getSnapshot().weights, { s1: 2, s2: 1 })
+  assert.equal(ui.$('[data-mixer-solo-bar]'), null)
+})
+
+test('interaction: a soloed channel that disappears ends the solo (§5.7)', async () => {
+  const ui = await mountTwo()
+  const { act, window } = ui
+  const click = element => act(() => { element.dispatchEvent(new window.MouseEvent('click', { bubbles: true })) })
+  click(ui.$('[data-mixer-solo="s1"]'))
+  assert.deepEqual(ui.$$('[data-mixer-strip]').map(node => node.getAttribute('data-mixer-strip')), ['s2'])
+
+  /* The host list drops the soloed Session (archived elsewhere): solo must not outlive it. */
+  ui.draw({ list: { ...list, ids: ['s2'], byId: { s2: list.byId.s2 } } })
+  assert.deepEqual(ui.$$('[data-mixer-strip]'), [])
+  assert.equal(ui.$('[data-mixer-solo-bar]'), null)
+  assert.ok(ui.$('[data-mixer-pane="s2"]') !== null)
+})
+
+test('interaction: the solo shortcut targets the channel holding the caret (§5.7)', async () => {
+  const ui = await mountTwo()
+  const { act } = ui
+  act(() => { ui.host.setPanelInfo({ activePanelId: 'mixer' }) })
+  const command = ui.host.shortcutCommands.find(entry => entry.id === 'mixer.channel.solo')
+  assert.ok(command !== null, 'the solo command must be registered')
+
+  /* No caret inside a channel: blocked with a reason instead of soloeing something random. */
+  const nowhere = command.resolve({ region: 'page', modal: null, target: null })
+  assert.equal(nowhere.status, 'blocked')
+  assert.match(nowhere.reason, /先把光标放进/)
+
+  /* Put the caret in the second channel's composer, then solo it. */
+  const field = ui.$$('[data-mixer-pane="s2"] [data-composer]')[0]
+  act(() => { field.focus() })
+  const resolution = command.resolve({ region: 'editable', modal: null, target: field })
+  assert.equal(resolution.status, 'handled')
+  act(() => { resolution.run() })
+  assert.deepEqual(ui.$$('[data-mixer-strip]').map(node => node.getAttribute('data-mixer-strip')), ['s1'])
+  /* Outside the mixer the same key passes through untouched. */
+  act(() => { ui.host.setPanelInfo({ activePanelId: null }) })
+  assert.equal(command.resolve({ region: 'page', modal: null, target: null }).status, 'pass')
+})
+
 test('interaction: a view tab pins the view through the factory seam (§4.4)', async () => {
   const ui = await mountTwo()
   const { act, window } = ui

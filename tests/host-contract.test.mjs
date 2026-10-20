@@ -242,7 +242,7 @@ test('host contract: the host registry accepts every shortcut default we registe
     ['desktop', 'macos'], ['desktop', 'windows'], ['desktop', 'linux'],
     ['web', 'macos'], ['web', 'windows'],
   ]
-  assert.equal(shortcutCommands.length, 11, 'cold boot must register all 11 channel jumps')
+  assert.equal(shortcutCommands.length, 12, 'cold boot must register 9 digit jumps + next/prev + solo')
 
   for (const [runtime, platform] of profiles) {
     const accepted = []

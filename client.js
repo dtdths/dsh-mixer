@@ -112,6 +112,12 @@ window.__ModuleLoader__.load({
     /** Fixed minimum pane width; more channels than fit scroll horizontally (#6). */
     const MIN_PANE_W = 380
     /**
+     * Width of a channel that solo folded away (spec §5.7). Narrow enough to give the
+     * focused channel almost the whole screen, wide enough for a state dot plus a
+     * truncated title — the two things a folded channel still has to tell you.
+     */
+    const SOLO_STRIP_W = 64
+    /**
      * Pane width at which the turn navigator is allowed to show (user decision:
      * lower the host's breakpoint rather than keep it or drop it).
      *
@@ -629,6 +635,24 @@ window.__ModuleLoader__.load({
       /* The dragged pane stays in flow as a quiet placeholder: the ghost over the
          pointer carries the live image. */
       dragSource: { opacity: 0.4 },
+      /* A channel folded away by solo (spec §5.7): a 64px column whose only job is the
+         state dot and enough title to recognise it; clicking it soloes that channel. */
+      strip: {
+        flex: `0 0 ${SOLO_STRIP_W}px`, minWidth: SOLO_STRIP_W, display: 'flex',
+        flexDirection: 'column', alignItems: 'center', gap: 6, padding: '10px 5px',
+        cursor: 'pointer', overflow: 'hidden', background: T.base,
+      },
+      stripHover: { background: T.hover },
+      stripTitle: {
+        font: `11.5px/1.5 ${SANS}`, color: T.fg2, maxWidth: '100%',
+        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+      },
+      /* The head's solo toggle: same quiet chip vocabulary as the row actions. */
+      headAction: {
+        flex: '0 0 auto', font: `11px/1.6 ${SANS}`, padding: '1px 7px', cursor: 'pointer',
+        borderRadius: PILL, color: T.fg2, background: 'transparent', border: `1px solid ${T.b1}`,
+      },
+      headActionOn: { color: T.fg, background: T.hover, border: `1px solid ${T.b2}` },
       /* A 5px grab area with a 1px line down its middle, so the divider still
          reads as a hairline until you hover it. */
       resizer: {
@@ -932,7 +956,7 @@ window.__ModuleLoader__.load({
         attention, backToConversation,
         workspaces, sessions,
         onToggleChannel, onNewSession, onPanelOpened, notice,
-        undoArchive, onUndoArchive,
+        undoArchive, onUndoArchive, soloTitle, onExitSolo,
         archived, onArchive, onStopAndArchive, archiveConfirm, archivePending, onDismissArchive,
       } = props
       const [panelOpen, setPanelOpen] = useState(false)
@@ -994,6 +1018,25 @@ window.__ModuleLoader__.load({
               title: '详情在控制台',
               'data-mixer-notice': '',
             }, notice),
+        /* Solo is a view state, so it needs a way out that does not depend on finding the
+           right channel again (spec §5.7). Escape is NOT it: inside a conversation the
+           host already owns Escape for "stop this turn". */
+        soloTitle === undefined
+          ? null
+          : h('span', {
+              style: { ...CSS.chip, borderColor: T.b2, color: T.fg, maxWidth: 280 },
+              title: '正在 solo：其余通道压成窄条（它们照常运行、照常亮灯）',
+              'data-mixer-solo-bar': '',
+            },
+              h('span', { style: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } },
+                `solo：${soloTitle}`),
+              h('button', {
+                type: 'button',
+                style: CSS.chipButton,
+                'data-mixer-solo-exit': '',
+                title: '退出 solo，回到并排',
+                onClick: onExitSolo,
+              }, '退出')),
         /* Archive is destructive and normally one-way; for ARCHIVE_UNDO_MS the bar carries
            the same offer the sidebar's archived toast does (spec §5.2, issue #12). */
         undoArchive === undefined
@@ -1231,7 +1274,7 @@ window.__ModuleLoader__.load({
     function Pane(props) {
       const {
         sessionId, summary, summaries, waitingKind, views, state,
-        onClose, onDragStateChange, renderFactorySlot,
+        onClose, onDragStateChange, renderFactorySlot, solo, onToggleSolo,
       } = props
       const isWaiting = waitingKind !== undefined
       /* Empty channels render in the host's own hero phase (requirement 1). */
@@ -1274,7 +1317,9 @@ window.__ModuleLoader__.load({
           /* Reorder by dragging the head. The payload matches what the sidebar
              already puts on the wire for a session row (see Grid's drop handler),
              so one code path serves both this and a drop from the sidebar. */
-          draggable: true,
+          /* Reordering a 64px strip row is not a gesture worth supporting, so solo
+             turns the head's dragging off (spec §5.7). */
+          draggable: solo !== true,
           title: isWaiting
             ? `${KIND_LABEL[waitingKind] || '等待你处理'}（拖动可调整通道顺序）`
             : '拖动可调整通道顺序',
@@ -1337,6 +1382,15 @@ window.__ModuleLoader__.load({
               }, crumb.title),
             ))),
           h('span', { style: { flex: 1 } }),
+          h('button', {
+            type: 'button',
+            style: solo ? { ...CSS.headAction, ...CSS.headActionOn } : CSS.headAction,
+            'data-mixer-solo': sessionId,
+            title: solo
+              ? '退出 solo，回到并排'
+              : '只看这个通道（其余通道压成窄条；不影响它们的运行与亮灯）',
+            onClick: () => onToggleSolo(sessionId),
+          }, solo ? '退出' : 'solo'),
           closeButton,
         ),
         h('div', { style: CSS.viewTabs, 'data-mixer-view-tabs': '' },
@@ -1384,6 +1438,51 @@ window.__ModuleLoader__.load({
       delta = Math.min(delta, drag.afterWeight - floor)
       delta = Math.max(delta, floor - drag.beforeWeight)
       return { beforeWeight: drag.beforeWeight + delta, afterWeight: drag.afterWeight - delta }
+    }
+
+    /**
+     * A channel that solo folded away (spec §5.7): 64px, the same state vocabulary as a
+     * full channel (waiting / running / subagents / completed), and a title short enough
+     * to recognise. Clicking it soloes that channel instead — solo is a view state, so
+     * folding must never hide the fact that a channel is waiting on you.
+     */
+    function Strip(props) {
+      const { sessionId, summary, summaryState, waitingKind, onSolo } = props
+      const [hovered, setHovered] = useState(false)
+      const title = summary === undefined ? sessionId.slice(0, 8) : summary.displayTitle
+      const waiting = waitingKind !== undefined
+      const dots = summaryState.dots
+      const label = waiting
+        ? (KIND_LABEL[waitingKind] || '等待你处理')
+        : dots.map(entry => entry.label).join(' · ')
+      return h('div', {
+        style: hovered ? { ...CSS.strip, ...CSS.stripHover } : CSS.strip,
+        'data-mixer-cell': sessionId,
+        'data-mixer-strip': sessionId,
+        role: 'button',
+        tabIndex: 0,
+        'aria-label': `solo ${title}`,
+        title: `${title}${label === '' ? '' : `（${label}）`} —— 点一下只看这个通道`,
+        onMouseEnter: () => setHovered(true),
+        onMouseLeave: () => setHovered(false),
+        onClick: () => onSolo(sessionId),
+        onKeyDown: (event) => {
+          if (event.key !== 'Enter' && event.key !== ' ') return
+          event.preventDefault()
+          onSolo(sessionId)
+        },
+      },
+        waiting
+          ? h('span', { style: CSS.rowWarnDot, 'data-mixer-strip-waiting': '' })
+          : null,
+        dots.length > 0
+          ? h('span', { style: CSS.runningWrap, role: 'status', 'aria-label': label, title: label },
+              dots.map(entry => StateDot === null
+                ? h('span', { key: entry.key, style: CSS.runningFallback })
+                : h(StateDot, { key: entry.key, state: entry.state, size: entry.size })))
+          : null,
+        h('span', { style: CSS.stripTitle }, title),
+      )
     }
 
     /**
@@ -1454,7 +1553,9 @@ window.__ModuleLoader__.load({
       const {
         ids, summaries, attention, states, SessionProvider, refFor,
         views, weights, onResize, onDropChannel, onClose, renderFactorySlot,
+        soloId, onSolo, onExitSolo,
       } = props
+      const soloed = soloId !== undefined && ids.indexOf(soloId) !== -1
       const trackRef = useRef(null)
       /* Insertion slot while a channel (or a sidebar session row) hovers the track. */
       const [dropIndex, setDropIndex] = useState(null)
@@ -1548,7 +1649,9 @@ window.__ModuleLoader__.load({
       },
         ids.map((id, index) => h(React.Fragment, { key: id },
           dropIndex === index ? indicator : null,
-          index === 0
+          /* Solo folds every other channel into a strip: dividers, drag reordering and
+             the width weights are all suspended while it lasts (spec §5.7). */
+          index === 0 || soloed
             ? null
             : h(Resizer, {
                 before: ids[index - 1],
@@ -1558,27 +1661,37 @@ window.__ModuleLoader__.load({
                 trackRef,
                 onResize,
               }),
-          h('div', {
-            style: {
-              ...CSS.trackCell,
-              flex: `${weightOf(weights, id)} 1 0`,
-              ...(drag !== undefined && drag.id === id ? CSS.dragSource : null),
-            },
-            'data-mixer-cell': id,
-            'data-mixer-dragging': drag !== undefined && drag.id === id ? 'yes' : 'no',
-          },
-            h(SessionProvider, { session: refFor(id) },
-              h(Pane, {
+          soloed && id !== soloId
+            ? h(Strip, {
                 sessionId: id,
                 summary: summaries[id],
-                summaries,
+                summaryState: states[id] === undefined ? channelState({}) : states[id],
                 waitingKind: attention[id] === undefined ? undefined : attention[id].kind,
-                views,
-                state: states[id] === undefined ? channelState({}) : states[id],
-                onClose,
-                onDragStateChange: (draggingId) => (draggingId === undefined ? endDrag() : beginDrag(draggingId)),
-                renderFactorySlot,
-              }))),
+                onSolo,
+              })
+            : h('div', {
+                style: {
+                  ...CSS.trackCell,
+                  flex: soloed ? '1 1 0' : `${weightOf(weights, id)} 1 0`,
+                  ...(drag !== undefined && drag.id === id ? CSS.dragSource : null),
+                },
+                'data-mixer-cell': id,
+                'data-mixer-dragging': drag !== undefined && drag.id === id ? 'yes' : 'no',
+              },
+                h(SessionProvider, { session: refFor(id) },
+                  h(Pane, {
+                    sessionId: id,
+                    summary: summaries[id],
+                    summaries,
+                    waitingKind: attention[id] === undefined ? undefined : attention[id].kind,
+                    views,
+                    state: states[id] === undefined ? channelState({}) : states[id],
+                    onClose,
+                    solo: soloed,
+                    onToggleSolo: soloed ? onExitSolo : onSolo,
+                    onDragStateChange: (draggingId) => (draggingId === undefined ? endDrag() : beginDrag(draggingId)),
+                    renderFactorySlot,
+                  }))),
         )),
         dropIndex === ids.length ? indicator : null)
     }
@@ -1594,7 +1707,7 @@ window.__ModuleLoader__.load({
         backToConversation, createSession, archiveSession, unarchiveSession,
         listViews, sidebar, useStore, actions,
         parkedIds, park, unpark, unparkAll, createdSessions, restoredSessions,
-        mixerRuntime, takePendingFirst,
+        soloId, setSolo, clearSolo, mixerRuntime, takePendingFirst,
       } = props
       /* Channels put away with the x live in the PLUGIN scope: not in the persisted
          board ("put away for now" is about this sitting, not a preference) and not in
@@ -1609,6 +1722,21 @@ window.__ModuleLoader__.load({
          A failed action must not look like a no-op: the host reports its own through the
          notify service, so ours reports through the bar it already owns. */
       const [notice, setNotice] = useState(undefined)
+      /* Solo: read once from plugin scope (so the reclaim remount keeps it), then driven
+         by this component's state. Never persisted (spec §5.7). */
+      const [soloState, setSoloState] = useState(() => soloId())
+      const toggleSolo = (sessionId) => {
+        setSoloState((current) => {
+          const next = current === sessionId ? undefined : sessionId
+          if (next === undefined) clearSolo()
+          else setSolo(next)
+          return next
+        })
+      }
+      const exitSolo = () => {
+        clearSolo()
+        setSoloState(undefined)
+      }
       /* The pending "this Session is running, stop it and archive?" offer. */
       const [archiveConfirm, setArchiveConfirm] = useState(undefined)
       /* The row whose archive call is in flight, so the action shows 归档中… instead of
@@ -1760,13 +1888,32 @@ window.__ModuleLoader__.load({
 
       const visible = channels.length > 0 ? channels : listIds.slice(0, PANE_LIMIT)
       const currentBoard = channels.length > 0 ? channels : visible
+      const soloSummary = soloState === undefined ? undefined : summaries[soloState]
       /* Publish what the apply-scope shortcuts need (§5.6): the live channel order and the
          two jump actions. Cleared on unmount so a keypress between panels cannot act on a
          stale list; `step` reads the caret's channel from the DOM, so next/prev wrap around
          from wherever the user actually is. */
+      /* A soloed channel that disappears (archived, or pruned from the host list) takes
+         the solo state with it — never a stale solo over a board that no longer has it
+         (spec §5.7). */
+      useEffect(() => {
+        if (soloState === undefined) return
+        if (visible.indexOf(soloState) !== -1) return
+        clearSolo()
+        setSoloState(undefined)
+      }, [soloState, channelsKey, listIdsKey])
+
       useEffect(() => {
         mixerRuntime.ids = visible
         mixerRuntime.focus = (sessionId) => setFocusId(sessionId)
+        mixerRuntime.toggleSolo = (sessionId) => {
+          setSoloState((current) => {
+            const next = current === sessionId ? undefined : sessionId
+            if (next === undefined) clearSolo()
+            else setSolo(next)
+            return next
+          })
+        }
         mixerRuntime.step = (delta) => {
           const ids = visible
           if (ids.length === 0) return
@@ -1784,6 +1931,7 @@ window.__ModuleLoader__.load({
           mixerRuntime.ids = []
           mixerRuntime.focus = () => {}
           mixerRuntime.step = () => {}
+          mixerRuntime.toggleSolo = () => {}
         }
       }, [channelsKey, listIdsKey])
       const attention = {}
@@ -2061,6 +2209,8 @@ window.__ModuleLoader__.load({
           onDismissArchive: () => setArchiveConfirm(undefined),
           undoArchive,
           onUndoArchive: undoArchivedChannel,
+          soloTitle: soloSummary === undefined ? undefined : soloSummary.displayTitle,
+          onExitSolo: exitSolo,
           notice,
         }),
         visible.length === 0
@@ -2074,6 +2224,11 @@ window.__ModuleLoader__.load({
               onResize: resizeChannels,
               onDropChannel: dropChannel,
               onClose: closeChannel, renderFactorySlot,
+              soloId: soloState,
+              /* A strip only exists for a folded channel, so clicking one is always
+                 "solo THAT channel" — the toggle turns it into the new solo. */
+              onSolo: toggleSolo,
+              onExitSolo: exitSolo,
             }),
       )
     }
@@ -2215,6 +2370,14 @@ window.__ModuleLoader__.load({
            Cordis' "without inject" failure path. */
         const unarchiveSession = (sessionId) => ctx.uiWorkspace.unarchiveSession(sessionId)
 
+        /* Solo (spec §5.7) is plugin-scope state for the same reason "put away" is: it
+           belongs to this sitting, must survive the reclaim remount (ADR-0003), and must
+           NOT be persisted — reopening the page returns to the plain side-by-side view. */
+        let solo = undefined
+        const soloId = () => solo
+        const setSolo = (sessionId) => { solo = sessionId }
+        const clearSolo = () => { solo = undefined }
+
         /* "Put away with the x" is plugin-scope state: it must outlive a panel
            remount (ADR-0003) without ever being persisted (spec §5.3). */
         const parked = new Set()
@@ -2255,6 +2418,7 @@ window.__ModuleLoader__.load({
           ids: [],
           focus: () => {},
           step: () => {},
+          toggleSolo: () => {},
         }
 
         /* The reclaim handshake: the panel is about to be unmounted, so "this Session
@@ -2348,6 +2512,9 @@ window.__ModuleLoader__.load({
             unarchiveSession,
             restoredSessions,
             parkedIds,
+            soloId,
+            setSolo,
+            clearSolo,
             park,
             unpark,
             unparkAll,
@@ -2447,6 +2614,30 @@ window.__ModuleLoader__.load({
           if (mixerRuntime.ids.length === 0) return { status: 'blocked', reason: '调音台里还没有通道' }
           return { status: 'handled', run: () => mixerRuntime.step(delta) }
         }
+        /* Solo the channel the caret is in (spec §5.7). Registered like the jumps, so it
+           is discoverable/rebindable; `KeyS` is free on all five profiles. */
+        ctx.effect(() => ctx.shortcuts.register({
+          id: 'mixer.channel.solo',
+          label: () => 'solo 当前通道（其余压成窄条）',
+          aliases: ['solo channel', 'focus one channel', '只看这个通道'],
+          defaults: shortcutDefaults('KeyS'),
+          regions: ['page', 'editable'],
+          modals: [],
+          resolve: () => {
+            if (!mixerActive()) return { status: 'pass' }
+            if (mixerRuntime.ids.length === 0) return { status: 'blocked', reason: '调音台里还没有通道' }
+            const caret = typeof document === 'undefined' || document.activeElement === null
+              || typeof document.activeElement.closest !== 'function'
+              ? null
+              : document.activeElement.closest('[data-mixer-pane]')
+            const target = caret === null ? undefined : caret.getAttribute('data-mixer-pane')
+            if (target === null || target === undefined || mixerRuntime.ids.indexOf(target) === -1) {
+              return { status: 'blocked', reason: '先把光标放进要 solo 的通道' }
+            }
+            return { status: 'handled', run: () => mixerRuntime.toggleSolo(target) }
+          },
+        }), 'mixer: shortcut mixer.channel.solo')
+
         for (const [id, label, aliases, code, delta] of [
           ['mixer.channel.next', '跳到下一个通道', ['next channel', '下一个通道'], 'BracketRight', 1],
           ['mixer.channel.prev', '跳到上一个通道', ['previous channel', '上一个通道'], 'BracketLeft', -1],
