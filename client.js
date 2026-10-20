@@ -185,6 +185,12 @@ window.__ModuleLoader__.load({
       hover: 'var(--dsw-alias-interactive-bg-hover)',
       /* The surface a button needs when it sits ON a hovered row (see rowAction). */
       elevated: 'var(--dsw-alias-button-elevated-fill)',
+      /* A recessed rail surface. `bg-layer-1/2` are both WHITE in the light theme, and the
+         host's own sidebar fill is only 6/255 off white — neither reads as a separate
+         surface next to the soloed pane (user feedback 2026-10-20: 「几乎找不到」). The
+         placeholder wash is the host token that is actually a visible step down in BOTH
+         themes, and a hairline divider rides its left/right edge. */
+      rail: 'var(--dsw-alias-bg-skeleton)',
       /* The host's focus colour (ui-theme focus.css falls back to this). */
       business: 'var(--dsw-alias-state-business-primary)',
     }
@@ -639,12 +645,22 @@ window.__ModuleLoader__.load({
          state dot and enough title to recognise it; clicking it soloes that channel. */
       strip: {
         flex: `0 0 ${SOLO_STRIP_W}px`, minWidth: SOLO_STRIP_W, display: 'flex',
-        flexDirection: 'column', alignItems: 'center', gap: 6, padding: '10px 5px',
-        cursor: 'pointer', overflow: 'hidden', background: T.base,
+        flexDirection: 'column', alignItems: 'center', gap: 6, padding: '10px 4px',
+        cursor: 'pointer', overflow: 'hidden',
+        /* A recessed surface PLUS a hairline: either alone was still lost next to the
+           white soloed pane (user feedback 2026-10-20). `inset` keeps the 64px width
+           exact, and the right-edge line doubles as the divider between two strips. */
+        background: T.rail,
+        boxShadow: `inset -1px 0 0 0 ${T.b2}`,
       },
-      stripHover: { background: T.hover },
+      /* Hover keeps the recessed surface (a translucent wash would lose it) and marks
+         "this one is clickable" with the accent edge the resizers use. */
+      stripHover: {
+        background: T.rail,
+        boxShadow: `inset 2px 0 0 0 ${T.business}, inset -1px 0 0 0 ${T.b2}`,
+      },
       stripTitle: {
-        font: `11.5px/1.5 ${SANS}`, color: T.fg2, maxWidth: '100%',
+        font: `11.5px/1.5 ${SANS}`, color: T.fg, maxWidth: '100%',
         overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
       },
       /* The head's solo toggle: same quiet chip vocabulary as the row actions. */
