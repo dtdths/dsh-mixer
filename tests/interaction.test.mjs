@@ -585,6 +585,64 @@ test('interaction: only the latest archive is offered for undo (§5.2)', async (
   assert.equal(ui.$('[data-mixer-undo-archive="s2"]'), null)
 })
 
+test('interaction: the channel-jump shortcuts focus the right channel (§5.6)', async () => {
+  const ui = await mountTwo()
+  const { act } = ui
+  /* The commands are registered with the plugin, once; the panel only supplies the live
+     channel order (mixerRuntime). */
+  const command = (id) => ui.host.shortcutCommands.find(entry => entry.id === id)
+  assert.ok(command('mixer.channel.1') !== null, 'the digit jumps must be registered')
+  assert.ok(command('mixer.channel.next') !== null && command('mixer.channel.prev') !== null)
+  const resolve = (id, region = 'page') => command(id).resolve({ region, modal: null, target: null })
+
+  /* Outside the mixer the command passes instead of swallowing the key. */
+  assert.equal(resolve('mixer.channel.2').status, 'pass')
+
+  act(() => { ui.host.setPanelInfo({ activePanelId: 'mixer' }) })
+  const second = resolve('mixer.channel.2', 'editable')
+  assert.equal(second.status, 'handled')
+  act(() => { second.run() })
+  await act(async () => {})
+  assert.equal(ui.document.activeElement.closest('[data-mixer-pane]').getAttribute('data-mixer-pane'), 's2')
+
+  /* A channel that is not on screen is blocked with a reason, never a silent no-op. */
+  const missing = resolve('mixer.channel.9')
+  assert.equal(missing.status, 'blocked')
+  assert.match(missing.reason, /没有第 9 个通道/)
+})
+
+test('interaction: next/prev wrap around from the focused channel (§5.6)', async () => {
+  const ui = await mountTwo()
+  const { act } = ui
+  act(() => { ui.host.setPanelInfo({ activePanelId: 'mixer' }) })
+  const command = id => ui.host.shortcutCommands.find(entry => entry.id === id)
+  const run = async (id) => {
+    const resolution = command(id).resolve({ region: 'editable', modal: null, target: null })
+    assert.equal(resolution.status, 'handled')
+    act(() => { resolution.run() })
+    await act(async () => {})
+    return ui.document.activeElement.closest('[data-mixer-pane]').getAttribute('data-mixer-pane')
+  }
+
+  assert.equal(await run('mixer.channel.1'), 's1')
+  assert.equal(await run('mixer.channel.next'), 's2')
+  /* Two channels: next from the last wraps to the first, prev from the first to the last. */
+  assert.equal(await run('mixer.channel.next'), 's1')
+  assert.equal(await run('mixer.channel.prev'), 's2')
+})
+
+test('interaction: jumping with no channels is blocked, not dead (§5.6)', async () => {
+  const ui = await loadInteractive()
+  /* No board yet: the fallback list still renders channels, so empty it explicitly. */
+  ui.draw({ board: { channels: [], weights: {} }, list: { ids: [], byId: {}, phase: 'ready', projectionsBySession: {} }, status, workspaces: { items: [], archivedSessionIds: [] } })
+  const { act } = ui
+  act(() => { ui.host.setPanelInfo({ activePanelId: 'mixer' }) })
+  const next = ui.host.shortcutCommands.find(entry => entry.id === 'mixer.channel.next')
+  const resolution = next.resolve({ region: 'page', modal: null, target: null })
+  assert.equal(resolution.status, 'blocked')
+  assert.match(resolution.reason, /还没有通道/)
+})
+
 test('interaction: a view tab pins the view through the factory seam (§4.4)', async () => {
   const ui = await mountTwo()
   const { act, window } = ui

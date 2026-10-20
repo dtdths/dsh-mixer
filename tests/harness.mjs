@@ -183,6 +183,7 @@ export function createHost(definition, { viewEntries = DEFAULT_VIEW_ENTRIES } = 
   const createCalls = []
   const archiveCalls = []
   const unarchiveCalls = []
+  const shortcutCommands = []
   let createFailure
   let archiveFailure
   let archiveThrows
@@ -250,6 +251,13 @@ export function createHost(definition, { viewEntries = DEFAULT_VIEW_ENTRIES } = 
         },
       },
     },
+    /* The host's shortcut registry (§5.6): the plugin registers channel jumps with it. */
+    shortcuts: {
+      register: (command) => {
+        shortcutCommands.push(command)
+        return () => {}
+      },
+    },
     /* The service the sidebar's own archive row action calls (navigation.ts:272). */
     uiWorkspace: {
       archiveSession: (sessionId, options) => {
@@ -282,7 +290,7 @@ export function createHost(definition, { viewEntries = DEFAULT_VIEW_ENTRIES } = 
   if (main === undefined) throw new Error('main panel was not registered')
   return {
     registrations, commands, ctx, retained, released, main,
-    selectPanelCalls, createCalls, archiveCalls, unarchiveCalls, setList, setPanelInfo,
+    selectPanelCalls, createCalls, archiveCalls, unarchiveCalls, shortcutCommands, setList, setPanelInfo,
     setCreateFailure: (error) => { createFailure = error },
     setArchiveFailure: (error) => { archiveFailure = error },
     setArchiveThrow: (error) => { archiveThrows = error },

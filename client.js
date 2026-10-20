@@ -1593,7 +1593,8 @@ window.__ModuleLoader__.load({
         useSessions, useSessionStatus, useWorkspaces, SessionProvider, renderFactorySlot, refFor,
         backToConversation, createSession, archiveSession, unarchiveSession,
         listViews, sidebar, useStore, actions,
-        parkedIds, park, unpark, unparkAll, createdSessions, restoredSessions, takePendingFirst,
+        parkedIds, park, unpark, unparkAll, createdSessions, restoredSessions,
+        mixerRuntime, takePendingFirst,
       } = props
       /* Channels put away with the x live in the PLUGIN scope: not in the persisted
          board ("put away for now" is about this sitting, not a preference) and not in
@@ -1725,6 +1726,14 @@ window.__ModuleLoader__.load({
             ? []
             : [...document.querySelectorAll('[data-mixer-pane]')]
           const pane = panes.find(node => node.getAttribute('data-mixer-pane') === focusId)
+          if (pane !== undefined) {
+            /* A channel scrolled out of the horizontally scrolling track would otherwise
+               take focus off-screen (this is also the jump target from §5.6). */
+            const cell = typeof pane.closest === 'function' ? pane.closest('[data-mixer-cell]') : null
+            if (cell !== null && typeof cell.scrollIntoView === 'function') {
+              cell.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+            }
+          }
           const field = pane === undefined
             ? null
             : pane.querySelector('[contenteditable="true"]') ?? pane.querySelector('input, textarea')
@@ -1751,6 +1760,32 @@ window.__ModuleLoader__.load({
 
       const visible = channels.length > 0 ? channels : listIds.slice(0, PANE_LIMIT)
       const currentBoard = channels.length > 0 ? channels : visible
+      /* Publish what the apply-scope shortcuts need (§5.6): the live channel order and the
+         two jump actions. Cleared on unmount so a keypress between panels cannot act on a
+         stale list; `step` reads the caret's channel from the DOM, so next/prev wrap around
+         from wherever the user actually is. */
+      useEffect(() => {
+        mixerRuntime.ids = visible
+        mixerRuntime.focus = (sessionId) => setFocusId(sessionId)
+        mixerRuntime.step = (delta) => {
+          const ids = visible
+          if (ids.length === 0) return
+          const active = typeof document === 'undefined' || document.activeElement === null
+            || typeof document.activeElement.closest !== 'function'
+            ? null
+            : document.activeElement.closest('[data-mixer-pane]')
+          const currentId = active === null ? undefined : active.getAttribute('data-mixer-pane')
+          const index = currentId === undefined || currentId === null ? -1 : ids.indexOf(currentId)
+          const base = index === -1 ? (delta > 0 ? -1 : 0) : index
+          const target = ids[(base + delta + ids.length) % ids.length]
+          if (target !== undefined) setFocusId(target)
+        }
+        return () => {
+          mixerRuntime.ids = []
+          mixerRuntime.focus = () => {}
+          mixerRuntime.step = () => {}
+        }
+      }, [channelsKey, listIdsKey])
       const attention = {}
       const states = {}
       ;[...visible, ...parked].forEach(id => {
@@ -2120,7 +2155,7 @@ window.__ModuleLoader__.load({
          `commandUi` is deliberately NOT here: it is provided later than this entry, so it
          is awaited with ctx.inject below. Declaring it would leave the entry pending on a
          boot that never provides it, and reading it unguarded THROWS in Cordis. */
-      inject: ['slots', 'sessions', 'layout', 'uiWorkspace'],
+      inject: ['slots', 'sessions', 'layout', 'uiWorkspace', 'shortcuts'],
       apply(ctx) {
         const refs = new Map()
         const refFor = (sessionId) => {
@@ -2209,6 +2244,17 @@ window.__ModuleLoader__.load({
           note: (sessionId) => { restored.add(sessionId) },
           forget: (sessionId) => { restored.delete(sessionId) },
           ids: () => [...restored],
+        }
+
+        /* Shortcuts live in apply scope (registered once, with the plugin) but act on
+           React state (which channels exist, which one has the caret). The panel
+           publishes those three facts on every render and clears them on unmount, so a
+           keypress can never act on a stale list. Same handshake family as
+           `createdSessions` / `takePendingFirst` below. */
+        const mixerRuntime = {
+          ids: [],
+          focus: () => {},
+          step: () => {},
         }
 
         /* The reclaim handshake: the panel is about to be unmounted, so "this Session
@@ -2306,6 +2352,7 @@ window.__ModuleLoader__.load({
             unpark,
             unparkAll,
             createdSessions,
+            mixerRuntime,
             takePendingFirst,
             sidebar,
             /* Read the registered conversation views for the tab row. Guarded because
@@ -2345,6 +2392,63 @@ window.__ModuleLoader__.load({
             ui: { kind: 'action', run: () => ctx.layout.selectPanel(PANEL_ID) },
           })
         })
+
+        /* Channel jumping through the HOST's own shortcut registry (spec §5.6): the
+           bindings appear in DSH's shortcut settings, the user can rebind them, and the
+           host arbitrates against the composer and other plugins. `primary+alt` is the
+           same "does not collide with text editing" family the host uses for
+           `session.new`; `regions` includes `editable` so it works while the caret is in
+           a channel's composer, which is where a mixer user actually is.
+
+           Outside the mixer every command `pass`es instead of swallowing the key, and
+           inside it a missing channel is `blocked` with a reason (the host's own
+           vocabulary), never a silent no-op. */
+        const shortcutDefaults = (code) => ({
+          'desktop:macos': { code, modifiers: ['primary', 'alt'] },
+          'desktop:windows': { code, modifiers: ['primary', 'alt'] },
+          'desktop:linux': { code, modifiers: ['primary', 'alt'] },
+          'web:macos': { code, modifiers: ['primary', 'alt'] },
+          'web:windows': { code, modifiers: ['primary', 'alt'] },
+        })
+        const mixerActive = () => ctx.layout.panelInfo.getSnapshot().activePanelId === PANEL_ID
+        const jumpToChannel = (index) => () => {
+          if (!mixerActive()) return { status: 'pass' }
+          const target = mixerRuntime.ids[index]
+          if (target === undefined) {
+            return { status: 'blocked', reason: `调音台里没有第 ${index + 1} 个通道` }
+          }
+          return { status: 'handled', run: () => mixerRuntime.focus(target) }
+        }
+        for (let index = 0; index < 9; index += 1) {
+          ctx.effect(() => ctx.shortcuts.register({
+            id: `mixer.channel.${index + 1}`,
+            label: () => `跳到调音台第 ${index + 1} 个通道`,
+            aliases: [`jump to channel ${index + 1}`, `channel ${index + 1}`, `第 ${index + 1} 个通道`],
+            defaults: shortcutDefaults(`Digit${index + 1}`),
+            regions: ['page', 'editable'],
+            modals: [],
+            resolve: jumpToChannel(index),
+          }), `mixer: shortcut mixer.channel.${index + 1}`)
+        }
+        const stepChannel = (delta) => () => {
+          if (!mixerActive()) return { status: 'pass' }
+          if (mixerRuntime.ids.length === 0) return { status: 'blocked', reason: '调音台里还没有通道' }
+          return { status: 'handled', run: () => mixerRuntime.step(delta) }
+        }
+        for (const [id, label, aliases, code, delta] of [
+          ['mixer.channel.next', '跳到下一个通道', ['next channel', '下一个通道'], 'ArrowRight', 1],
+          ['mixer.channel.prev', '跳到上一个通道', ['previous channel', '上一个通道'], 'ArrowLeft', -1],
+        ]) {
+          ctx.effect(() => ctx.shortcuts.register({
+            id,
+            label: () => label,
+            aliases,
+            defaults: shortcutDefaults(code),
+            regions: ['page', 'editable'],
+            modals: [],
+            resolve: stepChannel(delta),
+          }), `mixer: shortcut ${id}`)
+        }
       },
     }
   },

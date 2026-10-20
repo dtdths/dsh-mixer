@@ -95,6 +95,7 @@ function makeContext({ withCommandUi }) {
   const root = new Context()
   const registrations = []
   const commands = []
+  const shortcuts = []
   root.provide('slots', {
     inject: (key, callback) => { callback() },
     register: (options) => { registrations.push(options); return () => {} },
@@ -120,11 +121,16 @@ function makeContext({ withCommandUi }) {
      PENDING and this check reports it — which is how the missing `uiWorkspace` edge was
      caught on 2026-10-15 (the archive action reads it lazily, so nothing failed until a
      user clicked). */
-  root.provide('uiWorkspace', { archiveSession: () => Promise.resolve() })
+  root.provide('uiWorkspace', {
+    archiveSession: () => Promise.resolve(),
+    unarchiveSession: () => Promise.resolve(),
+  })
+  /* The channel-jump shortcuts (§5.6) register against the host's shortcut registry. */
+  root.provide('shortcuts', { register: (command) => { shortcuts.push(command); return () => {} } })
   if (withCommandUi) {
     root.provide('commandUi', { register: (contribution) => { commands.push(contribution); return () => {} } })
   }
-  return { root, registrations, commands }
+  return { root, registrations, commands, shortcuts }
 }
 
 /** Start a plugin the way the loader does; settle it and read the fiber state. */
@@ -153,9 +159,9 @@ const withoutPrimitives = await loadDefinition(path, { withPrimitives: false })
 const withoutStore = await loadDefinition(path, { withStore: false })
 
 async function boot({ withCommandUi }, loaded = definition) {
-  const { root, registrations, commands } = makeContext({ withCommandUi })
+  const { root, registrations, commands, shortcuts } = makeContext({ withCommandUi })
   const outcome = await start(root, loaded)
-  return { ...outcome, registrations, commands: commands.map(c => c.name) }
+  return { ...outcome, registrations, commands: commands.map(c => c.name), shortcuts: shortcuts.map(c => c.id) }
 }
 
 const results = {
@@ -195,6 +201,18 @@ for (const [label, outcome] of [['without ui-primitives', results.boot_without_p
     failures.push(`a missing module failed the entry (${label}): ${outcome.state} (${outcome.rejection})`)
   }
 }
+/* §5.6: the 9 digit jumps + next/prev must be registered, or the feature is silently
+   missing (the same class of silent loss the rest of this guard exists for). */
+const expectedShortcuts = [
+  'mixer.channel.1', 'mixer.channel.2', 'mixer.channel.3', 'mixer.channel.4', 'mixer.channel.5',
+  'mixer.channel.6', 'mixer.channel.7', 'mixer.channel.8', 'mixer.channel.9',
+  'mixer.channel.next', 'mixer.channel.prev',
+]
+const registeredShortcuts = results.cold_boot_without_commandUi.shortcuts
+for (const id of expectedShortcuts) {
+  if (!registeredShortcuts.includes(id)) failures.push(`shortcut ${id} was not registered on a cold boot`)
+}
+
 const warm = results.boot_with_commandUi
 if (warm.state !== 'ACTIVE' || warm.rejection !== null) failures.push(`with commandUi the entry ended ${warm.state}`)
 if (!warm.commands.includes('mixer')) failures.push('/mixer did not register when commandUi is present')

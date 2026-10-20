@@ -184,3 +184,16 @@ test('host contract: the archive-undo we mirror still exists, with the same hold
   const locales = read('packages/client/ui-workspace/src/client/locales.ts')
   assert.match(locales, /'toast\.archivedUndo': '撤销'/, 'the host undo wording moved')
 })
+
+test('host contract: the shortcut registry we bind channel jumps with still looks the same', () => {
+  /* §5.6: the plugin registers 11 commands against this registry. If the shape moves, the
+     jumps either stop binding or stop being rebindable — both silent from the UI. */
+  const types = read('packages/client/shortcuts/src/client/types.ts')
+  assert.match(types, /register\(command: ShortcutCommand\): \(\) => void/,
+    'Shortcuts.register moved: the channel jumps would stop binding')
+  assert.match(types, /export interface ShortcutCommand \{/, 'ShortcutCommand moved')
+  assert.match(types, /readonly regions: readonly ShortcutRegion\[\]/, 'the regions field moved')
+  assert.match(types, /export type ShortcutRegion = 'page' \| 'editable' \| 'terminal'/,
+    'the regions we register for moved')
+  assert.match(types, /readonly modals: readonly string\[\]/, 'the modals field moved')
+})
