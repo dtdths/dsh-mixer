@@ -321,8 +321,11 @@ e.dataTransfer.setData('text/plain', node.id)   // node.id 就是 SessionId
 调音台的价值是"多路并看"，但通道一多，换通道只能靠鼠标点。所以把**跳转**做成快捷键，并且走**宿主自己的快捷键服务**，而不是插件自己监听 `keydown`。
 
 - **注册**：`ctx.effect(() => ctx.shortcuts.register({...}), 'mixer: shortcut …')`，共 11 条命令 —— `mixer.channel.1` … `mixer.channel.9`（跳第 N 个通道）与 `mixer.channel.next` / `mixer.channel.prev`（上/下一个）。走宿主注册表换来三件事：出现在 DSH 的**快捷键设置**里、用户**可改键**、宿主负责与 composer / 其它插件的**冲突仲裁**。
-- **默认键位**：`primary+alt+Digit1..9` 与 `primary+alt+ArrowRight/ArrowLeft`。`primary+alt` 是宿主自己给"不撞文本编辑"的组合用的（如 `session.new`）。
-  **Desktop Linux 的 `next` / `prev` 是 `primary+alt+BracketRight/BracketLeft`**（2026-10-20 修）：宿主的 `bindingIssue` 把 `Ctrl+Alt+方向键` 在 Linux+Desktop 下判为 `reserved`（那里的键盘适配器就是浏览器那条，方向键归窗口管理器），而 `register()` **不分设备**地校验全部五个 profile 的默认键位 —— 声明一个方向键默认值就会抛 `Reserved shortcut default: <id>`，整个条目在冷启动时 FAILED。Linux 上换成方括号，是为了让命令**仍有默认可按**，而不是留成未绑定的空行。
+- **默认键位**：`primary+alt+Digit1..9`（跳第 N 个）与 **`primary+alt+BracketRight/BracketLeft`**（下一个 / 上一个，即 `Cmd/Ctrl+Alt+]` / `[`，**五个 profile 统一**）。`primary+alt` 是宿主自己给"不撞文本编辑"的组合用的（如 `session.new`）。
+  **为什么 `next`/`prev` 不用方向键**（2026-10-20 两次实测后定）：两个坑都在**平台层**，不在我们的 handler 里 ——
+  1. **宿主校验不分设备**：`register()` 会把全部五个 profile 的默认键位逐一过 `bindingIssue`，而 `Ctrl+Alt+方向键` 在 Desktop Linux 被判 `reserved` → 抛 `Reserved shortcut default: <id>` → 条目在冷启动时 FAILED（整页起不来，已真实踩中一次，见 §9.0h 第 4 行）；
+  2. **macOS 的 OS 级抢占**：`Cmd+Option+←/→` 是系统媒体键（上一首 / 下一首），**OS 在页面之前收走按键**（用户实测：按了之后音乐 App 换歌，通道不动）。这类冲突页面侧无解，只能避开。
+  方括号两个坑都不占，且各键盘布局都按得到。
 - **区域**：`regions: ['page', 'editable']` —— 光标在某个通道的输入框里时也能跳（那正是调音台用户的常态）；`modals: []`。
 - **行为**：跳转 = 把目标通道**滚动到可见**（`scrollIntoView({ block: 'nearest', inline: 'nearest' })`）并把焦点交到它的输入框（复用 §5.1③ 的焦点交接机制，含迟到的 composer）。`next`/`prev` 从**当前焦点所在通道**出发并**首尾环绕**；焦点不在任何通道时从第一个（next）/最后一个（prev）开始。
 - **不用时不吞键**：调音台不是当前面板 → `resolve` 返回 `pass`（不消费按键）；调音台在、但没有第 N 个通道 → `blocked` + 原因（宿主的词汇，不是静默无效）。
@@ -359,7 +362,7 @@ e.dataTransfer.setData('text/plain', node.id)   // node.id 就是 SessionId
 19. **归档过滤**（第四轮）：在侧边栏归档一个会话 → 打开 `会话` 浮层，它**不在列表里**（与侧边栏一致）；若它本来在通道里，该通道同时消失。
 20. **面板内归档**（第四轮）：指针移到某会话行 → 行尾出现 `归档` → 点它：安静会话直接归档（侧边栏同一套动作）；**正在执行**的会话先在该行下方问一次，点 `停止并归档` 才动手，点 `取消` 什么都不发生。
 21. **归档可撤销**（2026-10-20，issue #12）：归档一个通道 → 顶栏出现 `已归档「…」撤销`；点 `撤销` → 会话回到原工作区、通道回到**原位置**且宽度不变；**6 秒**不点则 chip 自行消失；撤销失败（宿主拒绝/没提供方法）在顶栏有可见提示。
-22. **通道间跳转快捷键**（2026-10-20，§5.6）：调音台打开时按 `Cmd/Ctrl+Alt+1..9` → 焦点落到第 N 个通道的输入框（越界的通道给提示、不静默）；`Cmd/Ctrl+Alt+←/→` 从当前通道出发上/下一个并首尾环绕（**Desktop Linux** 是 `Ctrl+Alt+]` / `Ctrl+Alt+[`）；**调音台没打开时按键不被吞**；在 DSH 的快捷键设置里能看到并改这 11 条命令。
+22. **通道间跳转快捷键**（2026-10-20，§5.6）：调音台打开时按 `Cmd/Ctrl+Alt+1..9` → 焦点落到第 N 个通道的输入框（越界的通道给提示、不静默）；`Cmd/Ctrl+Alt+]` / `[` 从当前通道出发下/上一个并首尾环绕（**全平台同一套**；不要用 `Cmd+Option+←/→`，那是 macOS 的媒体键）；**调音台没打开时按键不被吞**；在 DSH 的快捷键设置里能看到并改这 11 条命令。
 
 **验收记录（v1，2026-10-15，用户实测）**：在根包（`feat/mixer-v1` @ `5c8314b`，profile `web` 只装 `dsh-mixer`）上完成 —— 硬刷新冷启动**没有** `Failed to load plugins` / `web boot: N entry did not activate`；第 3–10 条逐条通过（含五档状态与左侧会话行逐档一致、持久化、归档联动、退出复原）。
 
@@ -506,8 +509,9 @@ agent 侧可复核的旁证（**只证明注册事实，不替代本清单的观
 | # | 来源 | 处置 | 落点 |
 | --- | --- | --- | --- |
 | 1 | issue #12：快捷键：通道间跳转、solo 当前通道 | 本轮只做**跳转**（用户 2026-10-20 选定范围，solo 留在后续轮）；solo 的形态与出现时机另行确定 | §5.6 / §6.22 |
-| 2 | 键位与接入方式 | 走**宿主快捷键服务**（`ctx.shortcuts.register`：可发现 / 用户可改键 / 宿主仲裁冲突），`primary+alt+Digit1..9` 与 `primary+alt+ArrowRight/Left`，`regions: ['page','editable']`；不用时不吞键（`pass`），缺通道给 `blocked` + 原因 | §5.6 |
+| 2 | 键位与接入方式 | 走**宿主快捷键服务**（`ctx.shortcuts.register`：可发现 / 用户可改键 / 宿主仲裁冲突），`primary+alt+Digit1..9` 与 `primary+alt+BracketRight/Left`（初版曾是方向键，因 Linux 保留键与 macOS 媒体键两处平台层冲突改为方括号，见第 4/5 行），`regions: ['page','editable']`；不用时不吞键（`pass`），缺通道给 `blocked` + 原因 | §5.6 |
 | 3 | 跨作用域 | 快捷键在 `apply` 注册、面板每次渲染 publish `mixerRuntime`（`ids`/`focus`/`step`），卸载清空 —— 键击不会作用在过期通道列表上 | §5.6 / §11 |
+| 5 | 修（2026-10-20，浏览器实测）：`Cmd+Option+←/→` **切换了音乐 App 的歌曲**，通道不动 | 该类组合被 **macOS 系统媒体键**在页面之前收走，页面侧无解 —— `next`/`prev` 的默认键位**全平台**改成 `primary+alt+]` / `[`（与 Linux 原方案合并成一套）；并在 `host-contract` 的快捷键用例里加一条**平台习惯守卫**：任何 `primary+alt+Arrow*` 默认值都直接判红（宿主 `bindingIssue` 看不到 OS 级占用） | §5.6 / §6.22 |
 | 4 | 修（2026-10-20，同轮冷启动）：装进 profile 后 `pnpm dsh web` 报 `web boot: 1 entry did not activate / dsh-mixer: failed` | `primary+alt+方向键` 在 **Desktop Linux** 被宿主判为 `reserved`，而默认键位要在全部五个 profile 上过检（与当前设备无关）→ `register()` 抛 `Reserved shortcut default`。Linux 改用方括号，其余平台不变；新增宿主侧真检查（跑宿主自己的 `bindingIssue`）钉住这一类 | §5.6 / §6.22 / `tests/host-contract.test.mjs` |
 
 ### 9.1 仍开放

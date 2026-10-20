@@ -144,4 +144,5 @@ onDragStart={e => { e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setDat
 **规则**：
 
 - 默认键位要在**全部五个 profile** 上合法；想只在部分平台绑定，就不声明那个 profile 的键（宿主的 `ui-workspace` 就这么做）。
+- **OS 级快捷键宿主规则看不到**：`Cmd+Option+←/→` 在 macOS 是系统媒体键（上一首/下一首），**系统在页面之前收走按键** —— 插件里的 `resolve` 根本不会被调用，用户看到的是"音乐换歌、通道不动"。这类只能靠避开：`dsh-mixer` 实测后把 `next`/`prev` 统一改成 `primary+alt+]` / `[`，并在 `host-contract` 里加了一条守卫（任何 `primary+alt+Arrow*` 默认值直接判红）。
 - `boot-check.mjs` / `tests/harness.mjs` 里的假 `register` 收什么都收，"11 条都注册了"证明不了宿主会接受。真判据要跑宿主自己的函数：见 `tests/host-contract.test.mjs` 的 `host registry accepts every shortcut default we register`（直接 `import` checkout 里的 `src/configuration.ts` / `src/binding.ts`，Node ≥ 22.18 原生剥离类型）。

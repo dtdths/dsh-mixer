@@ -224,6 +224,20 @@ test('host contract: the host registry accepts every shortcut default we registe
 
   const { definition } = await loadPlugin()
   const { shortcutCommands } = createHost(definition)
+  /* OS-level reservations the host's own rules cannot see: macOS takes
+     Cmd+Option+←/→ for the media keys (previous/next track) before the page gets the
+     event — user-verified 2026-10-20, it switched songs instead of channels. Defaults
+     must avoid the class, not just the host's `bindingIssue` list. */
+  const mediaProne = /^Arrow(?:Left|Right|Up|Down)$/
+  for (const command of shortcutCommands) {
+    for (const [profile, binding] of Object.entries(command.defaults ?? {})) {
+      if (binding === null || binding === undefined) continue
+      const modifiers = Array.isArray(binding.modifiers) ? binding.modifiers : []
+      const risky = mediaProne.test(binding.code) && modifiers.includes('primary') && modifiers.includes('alt')
+      assert.ok(!risky,
+        `${command.id} ships ${binding.code} as a default on ${profile}: macOS hands Cmd+Option+arrows to the media keys before the page sees them`)
+    }
+  }
   const profiles = [
     ['desktop', 'macos'], ['desktop', 'windows'], ['desktop', 'linux'],
     ['web', 'macos'], ['web', 'windows'],
