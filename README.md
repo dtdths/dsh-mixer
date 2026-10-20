@@ -29,7 +29,7 @@ DSH 原有界面增加一个**视图切换**按钮 / 指令，在「常规形态
 
 ## 状态
 
-**已发布：[`v1.3.0`](https://github.com/dtdths/dsh-mixer/releases/tag/v1.3.0)（此前 `v1.2.0` / `v1.1.0` / `v1.0.0`），`main` 与 `feat/mixer-v1` 同点。** 四条用户需求（空会话居中 / 新建不离开调音台 / 整格拖拽虚影 / 顶栏重做）与归档能力都已实现，并在真实 DSH 宿主上按 [`docs/spec.md`](docs/spec.md) §6 逐条验收通过。之后三轮：v1.1.0 = `会话` 浮层新建入口挪进左列每个工作区行 + 行/按钮 hover 态可辨；v1.2.0 = 归档可撤销（顶栏 6s `撤销`，通道回原位与宽度）；v1.3.0 = 通道间跳转快捷键（走宿主快捷键服务，可改键）。`npm run check` = 87 用例 + 冷启动守卫。
+**已发布：[`v1.4.0`](https://github.com/dtdths/dsh-mixer/releases/tag/v1.4.0)（此前 `v1.3.0` / `v1.2.0` / `v1.1.0` / `v1.0.0`），`main` 与 `feat/mixer-v1` 同点。** 四条用户需求（空会话居中 / 新建不离开调音台 / 整格拖拽虚影 / 顶栏重做）与归档能力都已实现，并在真实 DSH 宿主上按 [`docs/spec.md`](docs/spec.md) §6 逐条验收通过。之后四轮：v1.1.0 = `会话` 浮层新建入口挪进左列每个工作区行 + 行/按钮 hover 态可辨；v1.2.0 = 归档可撤销（顶栏 6s `撤销`，通道回原位与宽度）；v1.3.0 = 通道间跳转快捷键（走宿主快捷键服务，可改键）；v1.4.0 = solo（只看一个通道，其余压成 64px 窄条，不持久化）。`npm run check` = 90 用例 + 冷启动守卫。
 
 - **[`docs/spec.md`](docs/spec.md) 是交接物**：§1–§8 是设计，**§11 是正式版实现状态**（文件、内部缝、验证命令、逐轮验收记录）。
 - 设计由一次性原型验证（分支 [`spike/mixer-two-pane`](https://github.com/dtdths/dsh-mixer/tree/spike/mixer-two-pane) 的 `spike/` 包 `dsh-mixer-spike`），机制已全部搬进根包；**装根包后请把 spike 卸掉**。
@@ -76,7 +76,7 @@ profile 里会写成 `"dsh-mixer": "link:/…/dsh-mixer"`；之后改代码、�
 **B. 从 tag 装（冻结版本，推荐给别人 / 另一台机器）**：
 
 ```
-plugin_manager → install_bundle，target = "github:dtdths/dsh-mixer#v1.3.0"
+plugin_manager → install_bundle，target = "github:dtdths/dsh-mixer#v1.4.0"
 ```
 
 装进 `node_modules` 的是**快照**，不会热更新；升级就是重新装一个新 tag。
@@ -84,9 +84,9 @@ plugin_manager → install_bundle，target = "github:dtdths/dsh-mixer#v1.3.0"
 **C. tarball（离线 / 内网 / 不想让它连 GitHub）**：
 
 ```bash
-npm pack --cache /tmp/npm-cache        # 产出 dsh-mixer-1.3.0.tgz
+npm pack --cache /tmp/npm-cache        # 产出 dsh-mixer-1.4.0.tgz
 # 把 tgz 传过去，然后：
-plugin_manager → install_bundle，target = "/绝对路径/dsh-mixer-1.3.0.tgz"
+plugin_manager → install_bundle，target = "/绝对路径/dsh-mixer-1.4.0.tgz"
 ```
 
 **不发布 npm**：`package.json` 是 `private: true`，交付形态就是上面三种。
@@ -107,11 +107,11 @@ profile 侧判据：依赖是 `link:/…` 或 `github:…#tag`（或 tgz），`d
 ## 发布
 
 1. `npm run check` 绿；再对目标 DSH 宿主跑一次 `DSH_REPO=… npm run check`。
-2. 把 `package.json` 的 `version` bump 到与 tag 一致（v1.3.0 对应 `1.3.0`）。
+2. 把 `package.json` 的 `version` bump 到与 tag 一致（v1.4.0 对应 `1.4.0`）。
 3. 提交后合入默认分支：`git checkout main && git merge --ff-only feat/mixer-v1 && git push origin main`。
-4. 打 tag 并推送：`git tag -a v1.3.0 -m "dsh-mixer v1.3.0" && git push origin v1.3.0`。
-5. `gh release create v1.3.0 --title … --notes-file …`：notes 里写**安装命令**（B 方式那行）与**验证过的 DSH runtime 版本**（v1.3.0 对 `0.2.1-alpha.1` / checkout `5badb15` 验证）。
-6. 发完复核：`gh release view v1.3.0`、`git ls-remote --tags origin`，以及全新 profile 上按 B 方式装一次、走 §6 清单。
+4. 打 tag 并推送：`git tag -a v1.4.0 -m "dsh-mixer v1.4.0" && git push origin v1.4.0`。
+5. `gh release create v1.4.0 --title … --notes-file …`：notes 里写**安装命令**（B 方式那行）与**验证过的 DSH runtime 版本**（v1.4.0 对 `0.2.1-alpha.1` / checkout `5badb15` 验证）。
+6. 发完复核：`gh release view v1.4.0`、`git ls-remote --tags origin`，以及全新 profile 上按 B 方式装一次、走 §6 清单。
 
 ## License
 
