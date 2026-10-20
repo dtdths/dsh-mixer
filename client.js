@@ -171,6 +171,8 @@ window.__ModuleLoader__.load({
       /* The host's interactive hover wash (`bg-layer-1/2` are WHITE in the light theme,
          so a hover painted with them is invisible there). */
       hover: 'var(--dsw-alias-interactive-bg-hover)',
+      /* The surface a button needs when it sits ON a hovered row (see rowAction). */
+      elevated: 'var(--dsw-alias-button-elevated-fill)',
       /* The host's focus colour (ui-theme focus.css falls back to this). */
       business: 'var(--dsw-alias-state-business-primary)',
     }
@@ -566,12 +568,20 @@ window.__ModuleLoader__.load({
       sessionPick: {
         display: 'flex', alignItems: 'center', gap: 7, flex: 1, minWidth: 0, cursor: 'pointer',
       },
-      /* The hover-only archive action (round 4): a quiet text button, same vocabulary as
-         the row tag, so the row does not grow a toolbar. */
+      /* The hover-only row actions (归档 / ＋会话). They sit ON the row's hover wash, so
+         they need a raised surface of their own: `bg-layer-1/2` are white in the light
+         theme (identical to the panel) and sit one step BELOW the dark theme's wash, which
+         is why the first version of these chips blended into the row background (user
+         feedback 2026-10-20: 「按钮和背景一个颜色」). `button-elevated-fill` is the host's
+         "button surface" colour — white in the light theme, a step ABOVE the wash in the
+         dark one — and the stronger border plus the primary label make it read as a
+         button, not as part of the row. */
       rowAction: {
-        flex: '0 0 auto', font: `11.5px/1.5 ${SANS}`, padding: '2px 8px', cursor: 'pointer',
-        borderRadius: PILL, color: T.fg2, background: T.l2, border: `1px solid ${T.b1}`,
-      },      rowActionPrimary: { color: T.fg, background: T.l2, border: `1px solid ${T.b2}`, fontWeight: 600 },
+        flex: '0 0 auto', font: `11.5px/1.5 ${SANS}`, fontWeight: 600, padding: '2px 8px',
+        cursor: 'pointer', borderRadius: PILL, color: T.fg,
+        background: T.elevated, border: `1px solid ${T.b2}`,
+      },
+      rowActionPrimary: { color: T.fg, background: T.elevated, border: `1px solid ${T.b2}`, fontWeight: 600 },
       rowActionPending: { color: T.fg2, cursor: 'default', opacity: 0.7 },
       rowConfirm: {
         display: 'flex', alignItems: 'center', gap: 6, padding: '4px 7px 6px',
