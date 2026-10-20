@@ -1179,40 +1179,43 @@ window.__ModuleLoader__.load({
       })
       body.setAttribute('data-mixer-drag-skeleton', '')
       /* Big blocks, sized like message groups: with a zero basis they share whatever
-         height the channel has, so the picture never leaves a hole in the middle. */
+         height the channel has, and `space-between` spreads their text lines over the
+         whole block, so a taller channel gets airier blocks instead of a hole. */
       for (const [grow, width, edge, lines] of [
-        [3, '100%', 'stretch', [92, 78, 55]],
-        [2.2, '86%', 'flex-end', [88, 62]],
-        [1.6, '64%', 'flex-start', [72, 46]],
+        [3, '100%', 'stretch', [92, 78, 96, 64, 88, 72, 82, 54, 90, 66, 94, 58]],
+        [2.2, '86%', 'flex-end', [88, 62, 90, 74, 48, 80, 56, 68]],
+        [1.6, '64%', 'flex-start', [72, 46, 84, 58, 70, 50]],
       ]) {
         const area = doc.createElement('div')
         area.setAttribute('data-mixer-drag-block', '')
         Object.assign(area.style, {
           flex: `${grow} 1 0`, width, alignSelf: edge, minHeight: 0,
-          display: 'flex', flexDirection: 'column', justifyContent: 'center', gap: '9px',
+          display: 'flex', flexDirection: 'column', justifyContent: 'space-between', gap: '8px',
           padding: '16px', borderRadius: 'var(--dsw-radius-panel)',
           /* border-box matters: the widths below are percentages of the body. */
           boxSizing: 'border-box',
           background: T.skeleton, overflow: 'hidden',
         })
         for (const lineWidth of lines) {
-          area.appendChild(bar({ flex: '0 0 10px', width: `${lineWidth}%`, background: T.skeletonLine }))
+          area.appendChild(bar({ flex: '0 0 12px', width: `${lineWidth}%`, background: T.skeletonLine }))
         }
         body.appendChild(area)
       }
-      /* The composer's silhouette: input line over a row of toolbar chips. */
+      /* The composer's silhouette, sized like the real one: an input line over a toolbar
+         row (model seat + icon chips), the two pushed apart by space-between. */
       const composer = doc.createElement('div')
       composer.setAttribute('data-mixer-drag-composer', '')
       Object.assign(composer.style, {
-        flex: '0 0 auto', display: 'flex', flexDirection: 'column', gap: '10px',
-        padding: '12px 14px', border: `1px solid ${T.b2}`,
+        flex: '0 0 auto', minHeight: '104px', boxSizing: 'border-box',
+        display: 'flex', flexDirection: 'column', justifyContent: 'space-between',
+        gap: '14px', padding: '16px', border: `1px solid ${T.b2}`,
         borderRadius: 'var(--dsw-radius-panel)', background: T.base,
       })
-      composer.appendChild(bar({ flex: '0 0 8px', width: '46%' }))
+      composer.appendChild(bar({ flex: '0 0 12px', width: '58%' }))
       const toolbar = doc.createElement('div')
-      Object.assign(toolbar.style, { display: 'flex', gap: '6px' })
-      for (const chipWidth of [26, 40, 34]) {
-        toolbar.appendChild(bar({ width: `${chipWidth}px`, height: '8px' }))
+      Object.assign(toolbar.style, { display: 'flex', alignItems: 'center', gap: '8px' })
+      for (const chipWidth of [54, 32, 32, 22]) {
+        toolbar.appendChild(bar({ width: `${chipWidth}px`, height: '12px' }))
       }
       composer.appendChild(toolbar)
       body.appendChild(composer)

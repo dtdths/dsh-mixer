@@ -685,7 +685,16 @@ test('interaction: a transcript too tall to snapshot becomes a skeleton (§5.3)'
   assert.ok(image.querySelector('[data-mixer-drag-skeleton]') !== null)
   assert.equal(image.querySelector('[data-factory]'), null)
   assert.equal(image.querySelectorAll('[data-mixer-drag-block]').length, 3)
-  assert.ok(image.querySelector('[data-mixer-drag-composer]') !== null)
+  /* Round 9: the blocks carry MANY text lines (spread over the block height), not a
+     couple of thin ones at the top. */
+  for (const block of image.querySelectorAll('[data-mixer-drag-block]')) {
+    assert.ok(block.children.length >= 6, `expected a dense block, got ${block.children.length} lines`)
+  }
+  const composer = image.querySelector('[data-mixer-drag-composer]')
+  assert.ok(composer !== null)
+  /* The composer silhouette is sized like the real one: input line + toolbar chips. */
+  assert.equal(composer.children.length, 2)
+  assert.ok(composer.children[1].children.length >= 3)
   /* Composer sits last, so the bottom of the picture reads as the input box. */
   const parts = [...image.querySelector('[data-mixer-drag-skeleton]').children]
   assert.equal(parts[parts.length - 1].hasAttribute('data-mixer-drag-composer'), true)
