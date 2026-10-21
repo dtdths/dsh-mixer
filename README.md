@@ -1,117 +1,177 @@
-# dsh-mixer · 调音台视图
+<div align="center">
+  <img src="icon.svg" width="88" height="88" alt="dsh-mixer">
+  <h1>dsh-mixer · 调音台</h1>
+  <p><b>把多个 DSH 会话并排摆到一屏。谁在等你，一眼就看见。</b></p>
+  <p>
+    <img alt="release" src="https://img.shields.io/github/v/release/dtdths/dsh-mixer?color=3b82f6&label=release">
+    <img alt="checks" src="https://img.shields.io/badge/checks-96%20tests%20%2B%20cold%20boot-2ea043">
+    <img alt="license" src="https://img.shields.io/badge/license-MIT-6b7280">
+    <img alt="DSH" src="https://img.shields.io/badge/DSH-0.2.x-8b95a5">
+  </p>
+</div>
 
-> 一屏横向并列多个独立会话，每格一个通道，等待决策或授权的那一格即时亮灯。
->
-> A mixer-style multi-session view for DeepSeek Harness: several independent conversations side by side, each with its own composer and history, with the channels blocked on a decision or a permission request lit up.
+![调音台视图：几个会话并排，每格有自己的对话记录与输入框](docs/assets/mixer.png)
 
-## 痛点
+> 截图由真实 DSH 宿主驱动，工作区与会话均为虚构演示数据。
 
-在 DSH 里并行推进多个需求时，得在左侧工作区反复切换会话。任务一多，注意力黏在其中一个上，就忘了切回去 —— 其他会话卡在决策确认、权限申请那里，白白空等。
+---
 
-## 期望行为
+## 为什么需要它
 
-DSH 原有界面增加一个**视图切换**按钮 / 指令，在「常规形态」与「调音台形态」之间切换：
+并行推进三四个需求时，你一次只能看一个会话。切走的那几格如果卡在**等待审批**、**等待计划确认**、或者**有一个问题要你回答**，它们就安静地空等 —— 你不知道，机器也停在那儿。
 
-- **常规形态**：现状不变。
-- **调音台形态**：横向同时展示多个会话，每格一个通道，**互相独立**，各有独立输入框与对话记录 —— 相当于把「点左侧任务切换到不同页面」聚合到一屏。
-- **等待态可见**：哪个通道卡在决策 / 权限申请，这一格亮灯。
+调音台把这件事摊平：多个会话横着摆开，每个一格，等待你的那一格会亮。
 
-## 术语
+## 它做什么
 
-| 术语 | 含义 |
+- **一屏多路，真并排** —— 每格是一个真实会话：完整对话记录 + 官方输入框，草稿互不干扰。不是缩略图，也不是只读快照。
+- **亮灯** —— 卡在审批 / 计划确认 / 提问的通道，头部亮一条琥珀竖条；顶栏汇总成「N 个通道在等你」，点一下全部放回。状态点与左侧会话行**同源同判据**：等待、执行中、子代理运行中、已完成未读，一格一格对得上。
+- **solo** —— 临时只看一个通道，其余压成 64px 窄条：还在跑、还亮灯，只是不抢注意力。退出后宽度原样回来。
+- **归档可撤销** —— 在调音台里归档一个会话，顶栏会出现 6 秒的「已归档「…」撤销」，撤销后通道回到原位置、原宽度。
+- **跳转快捷键** —— `Cmd/Ctrl + Alt + 1..9` 跳第 N 个通道，`]` / `[` 上下切换，`S` solo。走 DSH 自己的快捷键服务，可以在设置里改键。
+- **排布随你** —— 拖通道头部排序（虚影是整格），拖格间分界线调宽，宽度和通道集合刷新后仍在。
+
+## 安装
+
+需要 **DSH 0.2.1 或更新的 Web 端**（`dsh web`；本版在 `0.2.1-rc.2` 上验证通过）。
+
+```bash
+# 一行装好（Web profile）
+dsh plugin --profile web add github:dtdths/dsh-mixer#v1.5.0
+```
+
+> `dsh` 不在 PATH 里（从源码 checkout 跑）就用 `pnpm dsh plugin --profile web add …`，见下面折叠。
+
+然后重启 DSH，并在浏览器里**硬刷新**一次（`Cmd/Ctrl + Shift + R` —— 插件改动必须走冷启动，热重载会骗人）：
+
+```bash
+dsh web            # 或你平时启动 DSH 的方式
+```
+
+看到会话头部多出一个 **调音台** 按钮，就装好了；也可以在输入框里敲 `/mixer` 进入。
+
+<details>
+<summary>从源码 checkout 运行 / 装在 Desktop / 完全离线</summary>
+
+**从 DSH 源码 checkout 运行**（仓库根目录）：
+
+```bash
+pnpm dsh plugin --profile web add github:dtdths/dsh-mixer#v1.5.0
+```
+
+**装在 Desktop 版**（先完整退出 Desktop，否则 profile 被占用）：
+
+```bash
+dsh plugin --profile desktop add github:dtdths/dsh-mixer#v1.5.0
+```
+
+**改代码 / 开发调试**（`link:` 本地目录，改完刷新即生效）：
+
+```bash
+dsh plugin --profile web add /绝对路径/dsh-mixer
+```
+
+**完全离线**（打包成 tgz 传过去）：
+
+```bash
+npm pack --cache /tmp/npm-cache        # 产出 dsh-mixer-1.5.0.tgz
+dsh plugin --profile web add /绝对路径/dsh-mixer-1.5.0.tgz
+```
+
+**不想敲命令**：如果你的 DSH 里有 `plugin_manager` 工具，直接在会话里说一句「安装插件 `github:dtdths/dsh-mixer#v1.5.0`」即可。
+
+> 装过早期原型 `dsh-mixer-spike` 的话请先卸掉 —— 它和正式版会抢同一个视图入口。
+</details>
+
+## 上手
+
+**1. 加通道** —— 顶栏的 `会话` 浮层里勾选会话，勾上即入、取消即出。浮层左列每个工作区行 hover 会出 `＋会话`，点它就在那个工作区新建一个会话，并直接成为第 0 个通道。
+
+**2. 等你的通道会亮** —— 某个通道的会话在等你处理时，头部左侧出现琥珀竖条，顶栏同步累加计数；点顶栏的汇总条可以把移出的通道全部放回。
+
+<img src="docs/assets/waiting.png" width="520" alt="通道内等待审批：拒绝 · 允许一次">
+
+*通道里的审批卡：拒绝 / 允许一次就在这一格完成，不用切走。*
+
+**3. solo 一下** —— 通道头部的 `solo`、顶栏的 `solo：… 退出`、或 `Cmd/Ctrl + Alt + S`，三处进出。其余通道压成窄条，状态点仍然准确。
+
+![solo：一个通道占满，其余压成窄条](docs/assets/mixer-solo.png)
+
+**4. 排布** —— 拖通道头部换位置；拖格与格之间的分界线调宽（单格最小 380px，超宽就横向滚动）；`×` 把通道移出屏幕，顶栏可再放回。
+
+**5. 回常规视图** —— 顶栏「常规视图」，或点左侧栏的会话行。侧栏恢复原状，原来那格的滚动位置与草稿都还在。
+
+## 快捷键
+
+| 动作 | 默认键位 |
 | --- | --- |
-| 通道 channel | 调音台里的每一格会话面板 |
-| 亮灯 waiting | 该通道正在等待你决策 / 授权 |
-| solo | 只聚焦某一个通道 |
-| mute | 暂时从调音台收起某个通道 |
+| 跳到第 1–9 个通道 | `Cmd/Ctrl + Alt + 1..9` |
+| 下一个 / 上一个通道 | `Cmd/Ctrl + Alt + ]` / `[` |
+| solo 光标所在通道 | `Cmd/Ctrl + Alt + S` |
 
-命名经过、落选方案与理由见 [docs/naming.md](docs/naming.md)。
+全部注册在 DSH 的快捷键设置里，可以改成你自己的。跳过去时光标落在该格草稿的**末尾**，接着写就行。
 
-## 状态
+## 设计上的取舍
 
-**已发布：[`v1.5.0`](https://github.com/dtdths/dsh-mixer/releases/tag/v1.5.0)（此前 `v1.4.0` / `v1.3.0` / `v1.2.0` / `v1.1.0` / `v1.0.0`），`main` 与 `feat/mixer-v1` 同点。** 四条用户需求（空会话居中 / 新建不离开调音台 / 整格拖拽虚影 / 顶栏重做）与归档能力都已实现，并在真实 DSH 宿主上按 [`docs/spec.md`](docs/spec.md) §6 逐条验收通过。之后五轮：v1.1.0 = `会话` 浮层新建入口挪进左列每个工作区行 + 行/按钮 hover 态可辨；v1.2.0 = 归档可撤销（顶栏 6s `撤销`，通道回原位与宽度）；v1.3.0 = 通道间跳转快捷键（走宿主快捷键服务，可改键）；v1.4.0 = solo（只看一个通道，其余压成 64px 窄条，不持久化）；v1.5.0 = 架构重构（五个 module 深化，**行为不变**）+ 跳转后光标落在草稿末尾。`npm run check` = 95 用例 + 冷启动守卫。
+- **左侧栏折成 56px 轨道** —— 宿主没有「完全隐藏」的选项，接管侧栏又会连带弄丢设置入口，所以左边永远留一条窄轨。
+- **单格最小 380px** —— 不够宽就横向滚动，而不是把每格挤到没法用。
+- **solo 与「移出」不持久化** —— 它们属于「这一次坐着」的临时状态，刷新即回到并排；**通道集合与每格宽度是持久化的**。
+- **归档撤销只留 6 秒** —— 与侧栏归档 toast 同一个窗口，不长不短。
+- **主题跟随宿主** —— 浅色/深色都用宿主 alias token，不另造一套颜色。
+- **纯客户端** —— Host half 保持为空，全部逻辑在视图层：不发网络请求、不写宿主的 `mainView`、不碰模型配置。
 
-- **[`docs/spec.md`](docs/spec.md) 是交接物**：§1–§8 是设计，**§11 是正式版实现状态**（文件、内部缝、验证命令、逐轮验收记录）。
-- 设计由一次性原型验证（分支 [`spike/mixer-two-pane`](https://github.com/dtdths/dsh-mixer/tree/spike/mixer-two-pane) 的 `spike/` 包 `dsh-mixer-spike`），机制已全部搬进根包；**装根包后请把 spike 卸掉**。
-- 原型已实测确认关键前提：**多会话真并排可行**（每格渲染官方 composer 与完整对话记录）。
-- Host half 保持空 —— 本需求无需 Host 改动。
+## 开发与自检
 
-## 结构
+```bash
+npm run check                              # 语法 + 96 个用例 + 冷启动守卫
+DSH_REPO=/另一个/DSH/checkout npm run check  # 换宿主重验：契约漂移会指到具体断言
+```
+
+`npm run check` 里的**冷启动守卫**不是可选项：本插件踩过「服务边写错 → 整页启动失败、而热重载看起来一切正常」的坑，所以任何 `apply()` / `inject` 改动都要走这条。
+
+客户端全部逻辑在单文件 [`client.js`](client.js)（`React.createElement`，非 JSX）；判断逻辑抽成纯函数并经 `__test` 暴露给 `tests/`。换宿主时最该读的是 [`tests/host-contract.test.mjs`](tests/host-contract.test.mjs) —— 它把插件依赖的每一条宿主契约都钉成了会失败的断言。
+
+## 文档
+
+| 想知道什么 | 看哪里 |
+| --- | --- |
+| 需求、决策、验收判据、实现红线、内部缝 | [`docs/spec.md`](docs/spec.md)（**§11 是实现状态与缝表**） |
+| 三条不改的架构决策 | [`docs/adr/`](docs/adr/) |
+| 插件开发踩过的坑（服务边、冷启动、拖拽、键位校验） | [`docs/plugin-gotchas.md`](docs/plugin-gotchas.md) |
+| 术语 | [`CONTEXT.md`](CONTEXT.md)、[`docs/naming.md`](docs/naming.md) |
+| README 里的截图怎么来的（宿主版本、复现步骤、演示数据说明） | [`docs/assets/PROVENANCE.md`](docs/assets/PROVENANCE.md) |
+| 待办增强 | [issue #12](https://github.com/dtdths/dsh-mixer/issues/12) |
+
+报 bug、提需求都走 [GitHub issues](https://github.com/dtdths/dsh-mixer/issues)（带一张截图最好）。
+
+<details>
+<summary>目录结构</summary>
 
 ```
 dsh-mixer/
 ├── package.json          # bundle 清单 + dsh.client.external / inject
-├── cordis.patch.yml      # 插入行 id=dsh-mixer / name=dsh-mixer
+├── cordis.patch.yml      # 插入行 id=dsh-mixer
 ├── index.js              # Host half（保持为空）
-├── client.js             # Client half（全部 UI 与状态，单文件）
+├── client.js             # Client half：全部 UI 与状态，单文件
 ├── boot-check.mjs        # 冷启动守卫（真实 Cordis Context + 对照项）
-├── tests/                # node --test 覆盖的纯函数缝
+├── tests/                # 纯函数缝 / 真 React 静态渲染 / jsdom 交互 / 宿主契约
 ├── locale/{en,zh}.json   # meta.title / meta.description
-├── icon.svg              # 原创图标：三路推子，其中一路亮灯
-├── docs/
-│   ├── spec.md            # ★ 实现 spec（§11 = 实现状态）
-│   ├── plugin-gotchas.md  # 已验证的 DSH 客户端插件坑 + 证据
-│   ├── naming.md          # 命名决策记录
-│   ├── open-questions.md  # 立项前的问题清单（已被 spec 取代，留作过程记录）
-│   ├── adr/               # ADR-0001 自持引用来源 / ADR-0002 整屏替换走 main
-│   ├── research/          # 可行性调研报告（83 个行号锚点已核校）
-│   └── agents/            # issue tracker / triage 标签 / 领域文档约定
+├── icon.svg              # 三路推子，其中一路亮灯
+├── docs/                 # spec / ADR / 踩坑 / 命名 / 调研
+│   └── assets/           # README 截图 + 出处记录
 └── LICENSE
 ```
+</details>
 
-原型（`spike/`）只在 `spike/mixer-two-pane` 分支上，保留作对照，不参与根包运行。
+## English
 
-## 安装
-
-只装 **Client half**（Host half 是空的），三种方式按需要选。装完都要把原型包 `dsh-mixer-spike` 从 profile 卸掉 —— 它和正式版会抢同一个 `main` key。
-
-**A. 从仓库目录装（开发 / 日常，热更新）** —— 当前开发机就是这种：
-
-```
-plugin_manager → install_bundle，target = 本包根目录的绝对路径
-```
-
-profile 里会写成 `"dsh-mixer": "link:/…/dsh-mixer"`；之后改代码、刷新页面即生效（改了 `apply()` / `inject` 必须硬刷新，见下方验证第 2 条）。
-
-**B. 从 tag 装（冻结版本，推荐给别人 / 另一台机器）**：
-
-```
-plugin_manager → install_bundle，target = "github:dtdths/dsh-mixer#v1.5.0"
-```
-
-装进 `node_modules` 的是**快照**，不会热更新；升级就是重新装一个新 tag。
-
-**C. tarball（离线 / 内网 / 不想让它连 GitHub）**：
+**dsh-mixer** is a mixer-style multi-session view for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness): several independent conversations side by side, each with its own history and composer, with the channels blocked on an approval or a question lit up — so nothing waits for you silently.
 
 ```bash
-npm pack --cache /tmp/npm-cache        # 产出 dsh-mixer-1.5.0.tgz
-# 把 tgz 传过去，然后：
-plugin_manager → install_bundle，target = "/绝对路径/dsh-mixer-1.5.0.tgz"
+dsh plugin --profile web add github:dtdths/dsh-mixer#v1.5.0
 ```
 
-**不发布 npm**：`package.json` 是 `private: true`，交付形态就是上面三种。
-
-## 验证
-
-拉代码后先跑自动化（无需浏览器）：
-
-```bash
-npm run check                          # 语法 + 79 个用例 + 冷启动守卫
-DSH_REPO=/别的/DSH/checkout npm run check   # 换宿主重验：契约漂移会指到具体文件与断言
-```
-
-装完的浏览器验收清单见 [docs/spec.md](docs/spec.md) §6 —— 其中**第 2 条"硬刷新冷启动"必须做**（任何 `apply()` 改动都不能只靠热重载验证）。
-
-profile 侧判据：依赖是 `link:/…` 或 `github:…#tag`（或 tgz），`dsh.profile.bundles` 里有 `dsh-mixer` 且**没有** `dsh-mixer-spike`；硬刷新后没有 `Failed to load plugins` / `web boot: N entry did not activate`；会话头出现「调音台」按钮，`/mixer` 可用。
-
-## 发布
-
-1. `npm run check` 绿；再对目标 DSH 宿主跑一次 `DSH_REPO=… npm run check`。
-2. 把 `package.json` 的 `version` bump 到与 tag 一致（v1.5.0 对应 `1.5.0`）。
-3. 提交后合入默认分支：`git checkout main && git merge --ff-only feat/mixer-v1 && git push origin main`。
-4. 打 tag 并推送：`git tag -a v1.5.0 -m "dsh-mixer v1.5.0" && git push origin v1.5.0`。
-5. `gh release create v1.5.0 --title … --notes-file …`：notes 里写**安装命令**（B 方式那行）与**验证过的 DSH runtime 版本**（v1.5.0 对 `0.2.1-alpha.1` / checkout `5badb15` 验证）。
-6. 发完复核：`gh release view v1.5.0`、`git ls-remote --tags origin`，以及全新 profile 上按 B 方式装一次、走 §6 清单。
+Restart DSH, hard-refresh the page, then press the **Mixer** button in the session header (or type `/mixer`). Requires DSH 0.2.1+ web. Screenshots use fabricated demo data.
 
 ## License
 
