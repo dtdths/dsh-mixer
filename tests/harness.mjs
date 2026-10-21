@@ -17,6 +17,7 @@
  */
 import { createRequire } from 'node:module'
 import { readdirSync } from 'node:fs'
+import { createHostFace } from './host-face.mjs'
 
 const DSH_REPO = process.env.DSH_REPO ?? '/Users/user/Documents/code/deepseek-harness'
 
@@ -175,37 +176,10 @@ const DEFAULT_VIEW_ENTRIES = [
  * @returns the captures: registrations, commands, retained/released Sessions, ctx.
  */
 export function createHost(definition, { viewEntries = DEFAULT_VIEW_ENTRIES } = {}) {
-  const registrations = []
-  const commands = []
-  const retained = []
-  const released = []
-  const selectPanelCalls = []
-  const createCalls = []
-  const archiveCalls = []
-  const unarchiveCalls = []
-  const shortcutCommands = []
-  let createFailure
-  let archiveFailure
-  let archiveThrows
-  let archiveDelayMs = 0
-  let unarchiveFailure
-  let unarchiveThrows
-  const listListeners = new Set()
-  const panelListeners = new Set()
+  const face = createHostFace({ viewEntries })
   const disposers = []
-  let listState = { ids: [], byId: {}, phase: 'ready', projectionsBySession: {} }
-  let panelInfoState = { activePanelId: null }
-  /* The two host stores the plugin watches from `apply` (spec §5.1 / ADR-0003). */
-  const setList = (next) => {
-    listState = next
-    for (const listener of [...listListeners]) listener()
-  }
-  const setPanelInfo = (next) => {
-    panelInfoState = next
-    for (const listener of [...panelListeners]) listener()
-  }
   const ctx = {
-    inject: (deps, callback) => callback({ commandUi: { register: (contribution) => { commands.push(contribution) } } }),
+    inject: (deps, callback) => callback({ commandUi: face.services.commandUi }),
     /* Run the effect body the way Cordis does (its returned disposer is kept), so the
        reclaim watcher really subscribes in tests. */
     effect: (body) => {
@@ -213,91 +187,33 @@ export function createHost(definition, { viewEntries = DEFAULT_VIEW_ENTRIES } = 
       if (typeof dispose === 'function') disposers.push(dispose)
       return () => {}
     },
-    slots: {
-      inject: (key, callback) => { callback() },
-      register: (options, component) => { registrations.push({ options, component }); return () => {} },
-      entries: (name) => (name === 'conversation.view' ? viewEntries : []),
-    },
-    sessions: {
-      retain: (sessionId) => {
-        retained.push(sessionId)
-        return { ready: Promise.resolve(), release: () => released.push(sessionId) }
-      },
-      create: (options) => {
-        createCalls.push(options)
-        /* A failing Host is a real path (spec §5.2): make it drivable. */
-        if (createFailure !== undefined) return Promise.reject(createFailure)
-        return Promise.resolve(`created-${createCalls.length}`)
-      },
-      list: {
-        getSnapshot: () => listState,
-        subscribe: (listener) => {
-          listListeners.add(listener)
-          return () => listListeners.delete(listener)
-        },
-      },
-    },
-    layout: {
-      selectPanel: (panelId) => {
-        selectPanelCalls.push(panelId)
-        setPanelInfo({ activePanelId: panelId })
-      },
-      toggleSidebar: () => {},
-      panelInfo: {
-        getSnapshot: () => panelInfoState,
-        subscribe: (listener) => {
-          panelListeners.add(listener)
-          return () => panelListeners.delete(listener)
-        },
-      },
-    },
-    /* The host's shortcut registry (§5.6): the plugin registers channel jumps with it. */
-    shortcuts: {
-      register: (command) => {
-        shortcutCommands.push(command)
-        return () => {}
-      },
-    },
-    /* The service the sidebar's own archive row action calls (navigation.ts:272). */
-    uiWorkspace: {
-      archiveSession: (sessionId, options) => {
-        archiveCalls.push({ sessionId, options })
-        /* A service that THROWS instead of rejecting: the "click does nothing" class. */
-        if (archiveThrows !== undefined) throw archiveThrows
-        if (archiveDelayMs > 0) {
-          return new Promise((resolve, reject) => {
-            setTimeout(() => {
-              if (archiveFailure !== undefined) reject(archiveFailure)
-              else resolve()
-            }, archiveDelayMs)
-          })
-        }
-        if (archiveFailure !== undefined) return Promise.reject(archiveFailure)
-        return Promise.resolve()
-      },
-      /* The undo half of the same service (`undoArchive: unarchiveSession`,
-         ui-workspace index.ts:228). */
-      unarchiveSession: (sessionId) => {
-        unarchiveCalls.push(sessionId)
-        if (unarchiveThrows !== undefined) throw unarchiveThrows
-        if (unarchiveFailure !== undefined) return Promise.reject(unarchiveFailure)
-        return Promise.resolve()
-      },
-    },
+    ...face.services,
   }
   definition.apply(ctx)
-  const main = registrations.find(entry => entry.options.name === 'main')
+  const main = face.calls.registrations.find(entry => entry.options.name === 'main')
   if (main === undefined) throw new Error('main panel was not registered')
+  const { failures } = face
   return {
-    registrations, commands, ctx, retained, released, main,
-    selectPanelCalls, createCalls, archiveCalls, unarchiveCalls, shortcutCommands, setList, setPanelInfo,
-    setCreateFailure: (error) => { createFailure = error },
-    setArchiveFailure: (error) => { archiveFailure = error },
-    setArchiveThrow: (error) => { archiveThrows = error },
-    setArchiveDelay: (ms) => { archiveDelayMs = ms },
-    setUnarchiveFailure: (error) => { unarchiveFailure = error },
-    setUnarchiveThrow: (error) => { unarchiveThrows = error },
-    panelInfo: () => panelInfoState,
+    registrations: face.calls.registrations,
+    commands: face.calls.commands,
+    ctx,
+    retained: face.calls.retained,
+    released: face.calls.released,
+    main,
+    selectPanelCalls: face.calls.selectPanel,
+    createCalls: face.calls.create,
+    archiveCalls: face.calls.archive,
+    unarchiveCalls: face.calls.unarchive,
+    shortcutCommands: face.calls.shortcuts,
+    setList: face.list.set,
+    setPanelInfo: face.panelInfo.set,
+    setCreateFailure: (error) => { failures.create = error },
+    setArchiveFailure: (error) => { failures.archive = error },
+    setArchiveThrow: (error) => { failures.archiveThrows = error },
+    setArchiveDelay: (ms) => { failures.archiveDelayMs = ms },
+    setUnarchiveFailure: (error) => { failures.unarchive = error },
+    setUnarchiveThrow: (error) => { failures.unarchiveThrows = error },
+    panelInfo: () => face.panelInfo.getSnapshot(),
     dispose: () => { for (const dispose of disposers) dispose() },
   }
 }

@@ -33,6 +33,11 @@ const DSH_REPO = process.env.DSH_REPO ?? '/Users/user/Documents/code/deepseek-ha
 /* Dynamic import: the context has to come from the checkout DSH_REPO names, and a
    static import specifier cannot read the environment. */
 const { Context } = await import(`${DSH_REPO}/vendor/cordis/lib/index.js`)
+/* The fake host services live in ONE place now (tests/host-face.mjs): this guard and the
+   node tests provide the same objects, so a new service edge is one edit — while this
+   guard still boots the real module through a REAL Cordis Context, which is the whole
+   point of it. */
+const { createHostFace } = await import('./tests/host-face.mjs')
 
 /* vendor/cordis/src/fiber.ts:147-152 */
 const STATE = { 0: 'PENDING', 1: 'LOADING', 2: 'ACTIVE', 3: 'FAILED', 4: 'DISPOSED' }
@@ -93,44 +98,21 @@ async function loadDefinition(path, { withPrimitives = true, withStore = true } 
 
 function makeContext({ withCommandUi }) {
   const root = new Context()
-  const registrations = []
-  const commands = []
-  const shortcuts = []
-  root.provide('slots', {
-    inject: (key, callback) => { callback() },
-    register: (options) => { registrations.push(options); return () => {} },
-  })
-  root.provide('sessions', {
-    retain: () => ({ ready: Promise.resolve(), release: () => {} }),
-    create: () => Promise.resolve('created'),
-    /* The list store the plugin watches from apply (spec §5.1 / ADR-0003). */
-    list: {
-      getSnapshot: () => ({ ids: [], byId: {}, phase: 'ready', projectionsBySession: {} }),
-      subscribe: () => () => {},
-    },
-  })
-  root.provide('layout', {
-    selectPanel: () => {},
-    toggleSidebar: () => {},
-    panelInfo: {
-      getSnapshot: () => ({ activePanelId: null }),
-      subscribe: () => () => {},
-    },
-  })
-  /* Every service in the module's `inject` list must exist here, or the fiber stays
-     PENDING and this check reports it — which is how the missing `uiWorkspace` edge was
-     caught on 2026-10-15 (the archive action reads it lazily, so nothing failed until a
-     user clicked). */
-  root.provide('uiWorkspace', {
-    archiveSession: () => Promise.resolve(),
-    unarchiveSession: () => Promise.resolve(),
-  })
-  /* The channel-jump shortcuts (§5.6) register against the host's shortcut registry. */
-  root.provide('shortcuts', { register: (command) => { shortcuts.push(command); return () => {} } })
-  if (withCommandUi) {
-    root.provide('commandUi', { register: (contribution) => { commands.push(contribution); return () => {} } })
+  const face = createHostFace()
+  for (const [name, service] of Object.entries(face.services)) {
+    /* `commandUi` is provided later than this entry in a real boot, so the cold-boot
+       scenario must not have it: that is what the two scenarios below compare. */
+    if (name === 'commandUi' && !withCommandUi) continue
+    root.provide(name, service)
   }
-  return { root, registrations, commands, shortcuts }
+  /* Getters, not snapshots: `apply` runs after this factory returns, so an eager copy
+     would always be empty (and this guard would report "nothing registered"). */
+  return {
+    root,
+    get registrations() { return face.calls.registrations.map(entry => entry.options) },
+    get commands() { return face.calls.commands },
+    get shortcuts() { return face.calls.shortcuts },
+  }
 }
 
 /** Start a plugin the way the loader does; settle it and read the fiber state. */
@@ -159,9 +141,16 @@ const withoutPrimitives = await loadDefinition(path, { withPrimitives: false })
 const withoutStore = await loadDefinition(path, { withStore: false })
 
 async function boot({ withCommandUi }, loaded = definition) {
-  const { root, registrations, commands, shortcuts } = makeContext({ withCommandUi })
-  const outcome = await start(root, loaded)
-  return { ...outcome, registrations, commands: commands.map(c => c.name), shortcuts: shortcuts.map(c => c.id) }
+  const context = makeContext({ withCommandUi })
+  const outcome = await start(context.root, loaded)
+  /* Read the captures AFTER the boot settled: they are getters, and `apply` registers
+     during `start`. */
+  return {
+    ...outcome,
+    registrations: context.registrations,
+    commands: context.commands.map(entry => entry.name),
+    shortcuts: context.shortcuts.map(entry => entry.id),
+  }
 }
 
 const results = {

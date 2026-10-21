@@ -23,6 +23,7 @@ import { readFileSync, existsSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { pathToFileURL } from 'node:url'
 import { createHost, loadPlugin } from './harness.mjs'
+import { createHostFace, HOST_SERVICES } from './host-face.mjs'
 
 const DSH_REPO = process.env.DSH_REPO ?? '/Users/user/Documents/code/deepseek-harness'
 const require = createRequire(import.meta.url)
@@ -265,4 +266,26 @@ test('host contract: the host registry accepts every shortcut default we registe
       accepted.push({ command, binding })
     }
   }
+})
+
+test('plugin contract: the one host face provides every service the entry injects', async () => {
+  /* The fixture and the edge list are the same table now (tests/host-face.mjs), so a new
+     injected service is caught here instead of surfacing as a cold-boot failure. */
+  const { definition } = await loadPlugin()
+  const face = createHostFace()
+  for (const name of definition.inject) {
+    assert.ok(
+      face.services[name] !== undefined,
+      `${name} is in the Cordis inject list but the fake host face provides no such service`,
+    )
+    assert.ok(
+      HOST_SERVICES.includes(name),
+      `${name} is injected but missing from HOST_SERVICES (tests/host-face.mjs)`,
+    )
+  }
+  assert.deepEqual(
+    [...definition.inject].sort(),
+    [...HOST_SERVICES].sort(),
+    'HOST_SERVICES drifted from the injected edges',
+  )
 })
