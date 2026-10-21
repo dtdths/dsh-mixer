@@ -20,6 +20,7 @@ const {
   normalizeBoard,
   createChannelLedger,
   createHostCalls,
+  createChannelDom,
   createViewState,
   moveChannel,
   heroFor,
@@ -230,6 +231,43 @@ test('heroFor: a blank Session gets the host hero phase, everything else stays d
   assert.deepEqual(heroFor(undefined), { phase: 'active', hero: false })
   assert.deepEqual(heroFor(null), { phase: 'active', hero: false })
   assert.deepEqual(heroFor({}), { phase: 'active', hero: false })
+})
+
+/*
+ * Spec §9.0j: the channel DOM vocabulary had no owner — "find the channel", "which channel
+ * has the caret" and "focus its field" were hand-written three times.
+ */
+test('createChannelDom: one owner for channel lookup, caret and focus', () => {
+  const focused = []
+  const fieldFor = () => ({ focus: () => focused.push('field') })
+  const paneFor = id => ({
+    getAttribute: name => (name === 'data-mixer-pane' ? id : null),
+    querySelector: selector => (selector === '[contenteditable="true"]' ? fieldFor() : null),
+    closest: selector => (selector === '[data-mixer-cell]' ? null : null),
+  })
+  const paneA = paneFor('a')
+  const paneB = paneFor('b')
+  const fieldB = { closest: selector => (selector === '[data-mixer-pane]' ? paneB : null) }
+  const doc = { querySelectorAll: selector => (selector === '[data-mixer-pane]' ? [paneA, paneB] : []), activeElement: fieldB }
+  const dom = createChannelDom(doc)
+
+  /* Which channel an element belongs to (and nothing when it belongs to none). */
+  assert.equal(dom.channelOf(fieldB), 'b')
+  assert.equal(dom.channelOf({ closest: () => null }), undefined)
+  assert.equal(dom.channelOf(null), undefined)
+  assert.equal(dom.caretChannel(), 'b')
+
+  /* Focus reveals first and reports whether the field was there at all: the panel's
+     frame retry depends on that `false`. */
+  assert.equal(dom.focus('a'), true)
+  assert.equal(focused.length, 1)
+  assert.equal(dom.focus('missing'), false)
+  assert.equal(focused.length, 1)
+
+  /* Without a document (server rendering) every read is empty instead of throwing. */
+  const headless = createChannelDom({})
+  assert.equal(headless.caretChannel(), undefined)
+  assert.equal(headless.focus('a'), false)
 })
 
 /*

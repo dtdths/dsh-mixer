@@ -262,6 +262,92 @@ window.__ModuleLoader__.load({
     }
 
     /**
+     * The channel DOM adapter (spec §9.0j): the ONE module that knows the names our markup
+     * publishes and the host hooks we read through them.
+     *
+     * Before this existed, "find the channel by id", "which channel owns the caret" and
+     * "where is the composer field" were hand-written in three places, each with its own
+     * `typeof document… !== 'function'` defence, and the drag ghost re-derived the pane's
+     * parts again. A rename or a host hook change meant finding all of them; a test had to
+     * re-stub every marker per case.
+     *
+     * The `data-mixer-*` names stay the public devtools vocabulary (spec §5.2 / §5.3);
+     * this adapter is just the single place they are spelled.
+     * @param doc - the document to read; defaults to the ambient one (injectable for tests).
+     * @returns the adapter's interface.
+     */
+    function createChannelDom(doc) {
+      const documentOf = () => {
+        if (doc !== undefined && doc !== null) return doc
+        return typeof document === 'undefined' ? undefined : document
+      }
+      const all = (selector, root) => {
+        const scope = root === undefined ? documentOf() : root
+        if (scope === undefined || scope === null || typeof scope.querySelectorAll !== 'function') return []
+        return [...scope.querySelectorAll(selector)]
+      }
+      const paneOf = (sessionId) => all('[data-mixer-pane]')
+        .find(pane => pane.getAttribute('data-mixer-pane') === sessionId)
+
+      return {
+        /* Which channel an element belongs to, and which one owns the caret. */
+        channelOf(element) {
+          if (element === null || element === undefined || typeof element.closest !== 'function') return undefined
+          const pane = element.closest('[data-mixer-pane]')
+          if (pane === null) return undefined
+          const id = pane.getAttribute('data-mixer-pane')
+          return id === null ? undefined : id
+        },
+        caretChannel() {
+          const active = documentOf() === undefined ? null : documentOf().activeElement
+          return this.channelOf(active)
+        },
+        paneOf,
+        /* The pane's parts: the two header rows it owns, its body, and the host's
+           conversation scroller inside that body. */
+        headOf: (pane) => (pane === null || pane === undefined ? null : pane.querySelector('[data-mixer-head]')),
+        tabsOf: (pane) => (pane === null || pane === undefined ? null : pane.querySelector('[data-mixer-view-tabs]')),
+        bodyOf: (pane) => (pane === null || pane === undefined ? null : pane.querySelector('[data-mixer-body]')),
+        scrollerOf(body) {
+          if (body === null || body === undefined) return null
+          const chat = body.querySelector('[data-conversation-region="chat"]')
+          return chat === null ? null : chat.querySelector('[data-conversation-scroll]')
+        },
+        /* The field a channel's caret lands in. Real content is the host's composer, so
+           this is the one lookup that knows both shapes. */
+        fieldOf(pane) {
+          if (pane === null || pane === undefined) return null
+          return pane.querySelector('[contenteditable="true"]') ?? pane.querySelector('input, textarea')
+        },
+        /* Bring a channel into view horizontally (the track scrolls, spec §5.4). */
+        reveal(sessionId) {
+          const pane = paneOf(sessionId)
+          if (pane === undefined) return false
+          const cell = typeof pane.closest === 'function' ? pane.closest('[data-mixer-cell]') : null
+          if (cell !== null && typeof cell.scrollIntoView === 'function') {
+            cell.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+          }
+          return true
+        },
+        /* Focus the channel's field, revealing it first. Returns false when the pane or
+           its composer is not in the DOM yet — the caller retries across frames. */
+        focus(sessionId) {
+          const pane = paneOf(sessionId)
+          if (pane === undefined) return false
+          this.reveal(sessionId)
+          const field = this.fieldOf(pane)
+          if (field === null || typeof field.focus !== 'function') return false
+          field.focus()
+          return true
+        },
+      }
+    }
+
+    /* One adapter for the whole module: it holds no state, and both the panel (React) and
+       the apply-scope shortcuts read through it. */
+    const channelDom = createChannelDom()
+
+    /**
      * The plugin-scope view state (spec §5.7 / §5.6 / §9.0j): the ONE module that owns
      * "what belongs to this sitting" — solo, the channels put away with the x, and which
      * Session must own the caret once the panel is mounted again.
@@ -1342,9 +1428,9 @@ window.__ModuleLoader__.load({
       })
       ghost.setAttribute('data-mixer-drag-ghost', '')
       ghost.appendChild(head.cloneNode(true))
-      const tabs = pane.querySelector('[data-mixer-view-tabs]')
+      const tabs = channelDom.tabsOf(pane)
       if (tabs !== null) ghost.appendChild(tabs.cloneNode(true))
-      const realBody = pane.querySelector('[data-mixer-body]')
+      const realBody = channelDom.bodyOf(pane)
       if (realBody !== null && bodyFitsCell(realBody)) {
         const clonedBody = realBody.cloneNode(true)
         clonedBody.removeAttribute('data-mixer-body')
@@ -2032,23 +2118,9 @@ window.__ModuleLoader__.load({
         let cancelled = false
         const attempt = () => {
           if (cancelled) return
-          const panes = typeof document === 'undefined' || typeof document.querySelectorAll !== 'function'
-            ? []
-            : [...document.querySelectorAll('[data-mixer-pane]')]
-          const pane = panes.find(node => node.getAttribute('data-mixer-pane') === focusId)
-          if (pane !== undefined) {
-            /* A channel scrolled out of the horizontally scrolling track would otherwise
-               take focus off-screen (this is also the jump target from §5.6). */
-            const cell = typeof pane.closest === 'function' ? pane.closest('[data-mixer-cell]') : null
-            if (cell !== null && typeof cell.scrollIntoView === 'function') {
-              cell.scrollIntoView({ block: 'nearest', inline: 'nearest' })
-            }
-          }
-          const field = pane === undefined
-            ? null
-            : pane.querySelector('[contenteditable="true"]') ?? pane.querySelector('input, textarea')
-          if (field !== null && typeof field.focus === 'function') {
-            field.focus()
+          /* The adapter reveals the channel and focuses its composer; `false` means the
+             pane (or the host's composer) is not in the DOM yet, so retry a frame later. */
+          if (channelDom.focus(focusId)) {
             focusTries.current = 0
             setFocusId(undefined)
             return
@@ -2093,11 +2165,7 @@ window.__ModuleLoader__.load({
           step: (delta) => {
             const ids = visible
             if (ids.length === 0) return
-            const active = typeof document === 'undefined' || document.activeElement === null
-              || typeof document.activeElement.closest !== 'function'
-              ? null
-              : document.activeElement.closest('[data-mixer-pane]')
-            const currentId = active === null ? undefined : active.getAttribute('data-mixer-pane')
+            const currentId = channelDom.caretChannel()
             const index = currentId === undefined ? -1 : ids.indexOf(currentId)
             const base = index === -1 ? (delta > 0 ? -1 : 0) : index
             const target = ids[(base + delta + ids.length) % ids.length]
@@ -2433,6 +2501,7 @@ window.__ModuleLoader__.load({
       normalizeBoard,
       createChannelLedger,
       createHostCalls,
+      createChannelDom,
       createViewState,
       moveChannel,
       heroFor,
@@ -2719,12 +2788,8 @@ window.__ModuleLoader__.load({
           resolve: () => {
             if (!mixerActive()) return { status: 'pass' }
             if (view.channels().length === 0) return { status: 'blocked', reason: '调音台里还没有通道' }
-            const caret = typeof document === 'undefined' || document.activeElement === null
-              || typeof document.activeElement.closest !== 'function'
-              ? null
-              : document.activeElement.closest('[data-mixer-pane]')
-            const target = caret === null ? undefined : caret.getAttribute('data-mixer-pane')
-            if (target === null || target === undefined || view.channels().indexOf(target) === -1) {
+            const target = channelDom.caretChannel()
+            if (target === undefined || view.channels().indexOf(target) === -1) {
               return { status: 'blocked', reason: '先把光标放进要 solo 的通道' }
             }
             return {
