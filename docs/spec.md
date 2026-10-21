@@ -352,7 +352,7 @@ e.dataTransfer.setData('text/plain', node.id)   // node.id 就是 SessionId
 
 ## 6. 验证清单（装完怎么确认生效）
 
-0. **先跑自动化**：`npm run check`（语法 + **95 个用例**：纯函数缝 + 真 store 引擎 + 真 React（静态渲染与 jsdom 交互）+ 侧栏折叠 seam + 措辞对齐 + 宿主契约漂移哨兵 + 冷启动守卫）。这一条绿了再动浏览器 —— 它覆盖的是"冷启动会炸整页"和"注册事实静默丢失"这两类只有跑起来才看得见的问题。
+0. **先跑自动化**：`npm run check`（语法 + **96 个用例**：纯函数缝 + 真 store 引擎 + 真 React（静态渲染与 jsdom 交互）+ 侧栏折叠 seam + 措辞对齐 + 宿主契约漂移哨兵 + 冷启动守卫）。这一条绿了再动浏览器 —— 它覆盖的是"冷启动会炸整页"和"注册事实静默丢失"这两类只有跑起来才看得见的问题。
 1. **安装**：`plugin_manager` → `install_bundle`，target = **本包根目录**；确认返回 `application: applied` 且 `warnings` 为空。随后**把 `dsh-mixer-spike` 从 profile 卸掉**（否则原型与正式版同时注册 `main` 的 key、会话头按钮和 `/mixer`，行为不可预测）。
    **验收判据（profile 文件）**：`~/.dsh/profiles/web/package.json` 里应当只剩 `"dsh-mixer": "link:/Users/user/Documents/code/d/dsh-mixer"` 这一条 mixer 依赖，且 `dsh.profile.bundles` 里只列 `dsh-mixer`、**不含** `dsh-mixer-spike`（装之前那里写的是 spike）。
 2. **冷启动**（关键，别用热重载代替）：**硬刷新**页面，确认**没有** `Failed to load plugins` / `web boot: N entry did not activate`。任何 `apply()` 改动都必须重做这一步。
@@ -380,6 +380,8 @@ e.dataTransfer.setData('text/plain', node.id)   // node.id 就是 SessionId
 20. **面板内归档**（第四轮）：指针移到某会话行 → 行尾出现 `归档` → 点它：安静会话直接归档（侧边栏同一套动作）；**正在执行**的会话先在该行下方问一次，点 `停止并归档` 才动手，点 `取消` 什么都不发生。
 21. **归档可撤销**（2026-10-20，issue #12）：归档一个通道 → 顶栏出现 `已归档「…」撤销`；点 `撤销` → 会话回到原工作区、通道回到**原位置**且宽度不变；**6 秒**不点则 chip 自行消失；撤销失败（宿主拒绝/没提供方法）在顶栏有可见提示。
 23. **solo**（2026-10-20，§5.7）：点通道头部的 `solo`（或 `Cmd/Ctrl+Alt+S`）→ 该通道占满、其余压成 64px 窄条；窄条**与主通道一眼可分**（凹陷表面 + 1px 分界线 + 主色标题，浅色主题下也看得出来），状态点仍准确；点窄条切到那个通道；顶栏 `solo：… 退出` 或再按一次回到并排，**各通道宽度与 solo 前一致**；solo 期间拖不动分界线也拖不动头部排序；把被 solo 的通道归档 → solo 自动结束；刷新页面 → 回到并排（不持久化）。
+25. **格内审批卡（2026-10-21，无头浏览器实测通过）**：在调音台的某一格里让 agent 触发一次授权 → **该格**出现 `[data-approval-key]` 卡（`等待审批` + 理由 + 命令 + `拒绝` / `允许一次`），该格 `data-mixer-state="waiting"`、顶栏汇总 +1，**其它格不受影响**；点 `允许一次` → 卡片消失（实测 ~1.6s）、composer 回来、该格继续执行、顶栏计数归零。
+
 24. **通道间跳转快捷键**（2026-10-20，§5.6）：调音台打开时按 `Cmd/Ctrl+Alt+1..9` → 焦点落到第 N 个通道的输入框、**光标在草稿末尾**（继续写，而不是从头来；越界的通道给提示、不静默）；`Cmd/Ctrl+Alt+]` / `[` 从当前通道出发下/上一个并首尾环绕（**全平台同一套**；不要用 `Cmd+Option+←/→`，那是 macOS 的媒体键）；**调音台没打开时按键不被吞**；在 DSH 的快捷键设置里能看到并改这 12 条命令。
 
 **验收记录（v1，2026-10-15，用户实测）**：在根包（`feat/mixer-v1` @ `5c8314b`，profile `web` 只装 `dsh-mixer`）上完成 —— 硬刷新冷启动**没有** `Failed to load plugins` / `web boot: N entry did not activate`；第 3–10 条逐条通过（含五档状态与左侧会话行逐档一致、持久化、归档联动、退出复原）。
@@ -561,7 +563,7 @@ agent 侧可复核的旁证（**只证明注册事实，不替代本清单的观
 ### 9.1 仍开放
 
 - **钉住视图不写会话记忆**（§4.4 边界）：要"点了就记住"，需上游暴露 store 或 `selectView` 动作。
-- **真实格内点审批卡未端到端实测**：机制上是官方 composer 按当前会话的 `pendingInteraction` 渲染，但尚未用真实审批点过。
+- ~~真实格内点审批卡未端到端实测~~ —— **2026-10-21 已实测通过**（无头 Chrome + CDP 驱动真实宿主：卡片出现在对应格、其它格无卡、点 `允许一次` 后 ~1.6s 清除并继续执行，见 §6.25）。只测了 `approval` 这一种 kind；`plan-review` / `question` 走同一条 `conversation.composer` overlay 链（`ui-user-questions` 的 `PendingQuestion` 同时承担两者），机制同源但**尚未逐个点过**。
 - **侧栏折叠状态需 layout API**（§7.1）。
 - **`completionUnread` 绿点在本插件里不会被"看过"清除**（§4.3b 语义陷阱）：v1 接受该语义；若日后不可接受，备选是插件自持一份 seen 集合、只在插件内算未读。
 - **UI 文案 locale 服务**：二期再查宿主 locale 服务的用法（宿主文案表如 `ui-workspace/src/client/locales.ts` 是 per-package 的）。
@@ -638,7 +640,7 @@ DSH_REPO=/新的/checkout 路径 npm run check
 
 另有四条行为常量，**只在文档与代码注释里约定、不进 `__test`**（它们不是判断，是时序参数，钉一个数字等于写同义反复）：`FOCUS_RETRY_FRAMES = 30`（光标交接等宿主 composer 出现的帧数上限，§5.1③）、`RECLAIM_WINDOW_MS = 2000`（抢回判据的时效窗，§5.1）、`HERO_LIFT_PX = 48`（空会话 hero 的光学上调，§4.4）与 `ARCHIVE_UNDO_MS = 6000`（归档撤销的时效窗，镜像宿主 toast 的 hold，§5.2）。
 
-后 4 条是 2026-10-15 第二轮新增（需求 1 / 2 / 4）。**用例数已落地**：v1 的 53 例 + 第二轮 15 例 = **68 例**全绿（`seams` +4、`render` +1、`interaction` +10）；第三轮再 +1（`interaction` 的「触发器要有按钮样」）；第四轮 +4（`seams` 的 `archiveActivityOf` + `interaction` 的归档过滤 / 悬停归档 / 停止并归档）；第五轮 +2（归档同步抛错 / 未提供 `archiveSession` 都要出提示，以及 `归档中…` 的进行中态）；第六轮 +1（`host-contract` 的 inject 名单哨兵）；第七轮 +1（`interaction` 的「替身虚影同尺寸/带真实头部/下一个 task 撤销」）；第八轮 +2（`interaction` 的「空会话虚影保留 hero 与 composer」「越界通道的虚影身体是骨架」）；第十一轮 **−1**（`landingWorkspace` 缝随「新建落点」退休一并删除，`interaction` 的左列用例原地改写为「跳转 + 行内新建」）；第十二轮 +4（`interaction` 的归档撤销三例：回原位/回宽度、失败与缺方法、只保留最新一条；`host-contract` 的归档撤销锚点）；第十三轮 +4（`interaction` 的通道跳转三例：跳第 N 个并聚焦、不吞键与越界提示、next/prev 首尾环绕；`host-contract` 的快捷键注册表锚点）；同轮修 +1（`host-contract` 的「默认键位过宿主校验」）；第十四轮 +3（`interaction` 的 solo 三例）；**第十五轮（架构评审落地）** +5（`seams` 新增 ledger / runner / view state / DOM adapter 四例 —— 每例把一个 module 的规则一次钉住；`host-contract` 新增 host-face 名单一致性哨兵）= **95 例**。`tests/harness.mjs` 的假宿主已补齐 `ctx.sessions.create` 的记录、`sessions.list` / `layout.panelInfo` 两个可订阅源（含 `setList` / `setPanelInfo` 驱动），并且 `useStore` 改成真的订阅 + 版本号重渲染——原来只读快照，导致"面板自己的写入"在测试里根本不会触发重渲染，`×` 关闭那条用例是靠别的原因才过的。
+后 4 条是 2026-10-15 第二轮新增（需求 1 / 2 / 4）。**用例数已落地**：v1 的 53 例 + 第二轮 15 例 = **68 例**全绿（`seams` +4、`render` +1、`interaction` +10）；第三轮再 +1（`interaction` 的「触发器要有按钮样」）；第四轮 +4（`seams` 的 `archiveActivityOf` + `interaction` 的归档过滤 / 悬停归档 / 停止并归档）；第五轮 +2（归档同步抛错 / 未提供 `archiveSession` 都要出提示，以及 `归档中…` 的进行中态）；第六轮 +1（`host-contract` 的 inject 名单哨兵）；第七轮 +1（`interaction` 的「替身虚影同尺寸/带真实头部/下一个 task 撤销」）；第八轮 +2（`interaction` 的「空会话虚影保留 hero 与 composer」「越界通道的虚影身体是骨架」）；第十一轮 **−1**（`landingWorkspace` 缝随「新建落点」退休一并删除，`interaction` 的左列用例原地改写为「跳转 + 行内新建」）；第十二轮 +4（`interaction` 的归档撤销三例：回原位/回宽度、失败与缺方法、只保留最新一条；`host-contract` 的归档撤销锚点）；第十三轮 +4（`interaction` 的通道跳转三例：跳第 N 个并聚焦、不吞键与越界提示、next/prev 首尾环绕；`host-contract` 的快捷键注册表锚点）；同轮修 +1（`host-contract` 的「默认键位过宿主校验」）；第十四轮 +3（`interaction` 的 solo 三例）;**第十五轮（架构评审落地）** +5（`seams` 新增 ledger / runner / view state / DOM adapter 四例 —— 每例把一个 module 的规则一次钉住；`host-contract` 新增 host-face 名单一致性哨兵）；第十六轮 +1（`interaction` 的「空板上新建通道保留可见通道」）= **96 例**。`tests/harness.mjs` 的假宿主已补齐 `ctx.sessions.create` 的记录、`sessions.list` / `layout.panelInfo` 两个可订阅源（含 `setList` / `setPanelInfo` 驱动），并且 `useStore` 改成真的订阅 + 版本号重渲染——原来只读快照，导致"面板自己的写入"在测试里根本不会触发重渲染，`×` 关闭那条用例是靠别的原因才过的。
 
 **验证**：`npm run check`（语法 + **53 个用例** + 冷启动）在本机全绿；**浏览器行为已由用户按 §6 十条在根包上验收通过**（2026-10-15，装根包 + 卸 `dsh-mixer-spike` + 硬刷新；见 §6 验收记录）。
 **第二轮（需求 1–4）实现后的验证**：`npm run check` = **76 个用例全绿** + 冷启动 `PASS`（2026-10-15）；**§6 第 12–20 条属观感项，由用户在浏览器里逐条验收** —— 尤其"整格虚影"与"让位"两处只有真拖拽能验。
