@@ -262,6 +262,83 @@ window.__ModuleLoader__.load({
     }
 
     /**
+     * The plugin-scope view state (spec §5.7 / §5.6 / §9.0j): the ONE module that owns
+     * "what belongs to this sitting" — solo, the channels put away with the x, and which
+     * Session must own the caret once the panel is mounted again.
+     *
+     * These used to be six separate handles (18 members) injected as eleven props, each
+     * read with a snapshot at render time and no way to announce a change; the panel
+     * therefore also mirrored solo in React state and cached the hand-off in a ref. One
+     * module with a subscription replaces all of that: the panel reads a snapshot, and a
+     * command changes it through this interface only.
+     *
+     * Not persisted on purpose (ADR-0003 + spec §5.7): it must survive a panel remount,
+     * and must NOT survive a reload.
+     * @returns the view state's interface.
+     */
+    function createViewState() {
+      const listeners = new Set()
+      const parked = new Set()
+      let solo
+      let firstInLine
+      let channels = []
+      let commands = { focus: () => {}, step: () => {} }
+
+      const emit = () => { for (const listener of [...listeners]) listener() }
+
+      return {
+        subscribe(listener) {
+          listeners.add(listener)
+          return () => { listeners.delete(listener) }
+        },
+        snapshot() {
+          return { solo, parked: [...parked], firstInLine }
+        },
+        /* Solo: one value, written in one place (spec §5.7). */
+        setSolo(sessionId) {
+          if (sessionId === solo) return
+          solo = sessionId
+          emit()
+        },
+        /* Put away with the x: the channel leaves the board but the Session keeps running
+           and keeps its width (spec §5.3). */
+        parkedIds() { return [...parked] },
+        park(sessionId) {
+          if (parked.has(sessionId)) return
+          parked.add(sessionId)
+          emit()
+        },
+        unpark(sessionId) {
+          if (!parked.delete(sessionId)) return
+          emit()
+        },
+        clearParked() {
+          if (parked.size === 0) return
+          parked.clear()
+          emit()
+        },
+        /* The reclaim remount hand-off (ADR-0003): the panel that owned the channels is
+           about to be unmounted, so "this Session goes first and owns the caret" waits
+           here for the next mount. Not a notification: it is read exactly once. */
+        handOff(sessionId) { firstInLine = sessionId },
+        take() {
+          const id = firstInLine
+          firstInLine = undefined
+          return id
+        },
+        /* The panel publishes the live channel order and the jump commands for the
+           apply-scope shortcuts. Plain assignments: publishing must never notify, or a
+           render would schedule another render. */
+        publish(ids, nextCommands) {
+          channels = ids
+          if (nextCommands !== undefined) commands = nextCommands
+        },
+        channels() { return channels },
+        commands() { return commands },
+      }
+    }
+
+    /**
      * Persist key for the whole board (which Sessions are channels, plus their
      * relative widths), namespaced like ui-sidebar-right's `dsh.sidebar-right.v1`.
      *
@@ -1829,14 +1906,14 @@ window.__ModuleLoader__.load({
         useSessions, useSessionStatus, useWorkspaces, SessionProvider, renderFactorySlot, refFor,
         backToConversation, createSession, archiveSession, unarchiveSession,
         listViews, sidebar, useStore, actions,
-        parkedIds, park, unpark, unparkAll, ledger,
-        soloId, setSolo, clearSolo, mixerRuntime, takePendingFirst,
+        ledger, view,
       } = props
-      /* Channels put away with the x live in the PLUGIN scope: not in the persisted
-         board ("put away for now" is about this sitting, not a preference) and not in
-         component state either, because the panel is remounted whenever the mixer
-         takes its centre panel back (ADR-0003). */
-      const parked = parkedIds()
+      /* solo / 移出 / 重挂交接 live in the plugin scope (ADR-0003): they must survive the
+         mixer being remounted and must never be persisted. One subscription replaces the
+         copy of that state this component used to keep (spec §9.0j). */
+      const [viewState, setViewState] = useState(() => view.snapshot())
+      useEffect(() => view.subscribe(() => setViewState(view.snapshot())), [view])
+      const parked = viewState.parked
       /* The Session whose composer must own the caret once it is on screen. Explicit,
          because the host's InputBar auto-focuses every pane and the last mount wins
          (spec §5.1, requirement 2). */
@@ -1845,21 +1922,11 @@ window.__ModuleLoader__.load({
          A failed action must not look like a no-op: the host reports its own through the
          notify service, so ours reports through the bar it already owns. */
       const [notice, setNotice] = useState(undefined)
-      /* Solo: read once from plugin scope (so the reclaim remount keeps it), then driven
-         by this component's state. Never persisted (spec §5.7). */
-      const [soloState, setSoloState] = useState(() => soloId())
-      const toggleSolo = (sessionId) => {
-        setSoloState((current) => {
-          const next = current === sessionId ? undefined : sessionId
-          if (next === undefined) clearSolo()
-          else setSolo(next)
-          return next
-        })
-      }
-      const exitSolo = () => {
-        clearSolo()
-        setSoloState(undefined)
-      }
+      /* Solo is a value in the plugin-scope view state (spec §5.7): the panel only reads
+         it, so a remount cannot lose it and a second writer cannot forget the mirror. */
+      const soloState = viewState.solo
+      const toggleSolo = (sessionId) => { view.setSolo(soloState === sessionId ? undefined : sessionId) }
+      const exitSolo = () => { view.setSolo(undefined) }
       /* The pending "this Session is running, stop it and archive?" offer. */
       const [archiveConfirm, setArchiveConfirm] = useState(undefined)
       /* The row whose archive call is in flight, so the action shows 归档中… instead of
@@ -1870,7 +1937,7 @@ window.__ModuleLoader__.load({
       /* "Insert this Session first" is handed over by the apply-scope reclaim watcher:
          the panel those channels belonged to has just been unmounted. */
       const pendingRef = useRef(null)
-      if (pendingRef.current === null) pendingRef.current = takePendingFirst() ?? false
+      if (pendingRef.current === null) pendingRef.current = view.take() ?? false
       const board = normalizeBoard(useStore(state => state))
       const channels = board.channels
       const weights = board.weights
@@ -2014,40 +2081,30 @@ window.__ModuleLoader__.load({
       useEffect(() => {
         if (soloState === undefined) return
         if (visible.indexOf(soloState) !== -1) return
-        clearSolo()
-        setSoloState(undefined)
+        view.setSolo(undefined)
       }, [soloState, channelsKey, listIdsKey])
 
       useEffect(() => {
-        mixerRuntime.ids = visible
-        mixerRuntime.focus = (sessionId) => setFocusId(sessionId)
-        mixerRuntime.toggleSolo = (sessionId) => {
-          setSoloState((current) => {
-            const next = current === sessionId ? undefined : sessionId
-            if (next === undefined) clearSolo()
-            else setSolo(next)
-            return next
-          })
-        }
-        mixerRuntime.step = (delta) => {
-          const ids = visible
-          if (ids.length === 0) return
-          const active = typeof document === 'undefined' || document.activeElement === null
-            || typeof document.activeElement.closest !== 'function'
-            ? null
-            : document.activeElement.closest('[data-mixer-pane]')
-          const currentId = active === null ? undefined : active.getAttribute('data-mixer-pane')
-          const index = currentId === undefined || currentId === null ? -1 : ids.indexOf(currentId)
-          const base = index === -1 ? (delta > 0 ? -1 : 0) : index
-          const target = ids[(base + delta + ids.length) % ids.length]
-          if (target !== undefined) setFocusId(target)
-        }
-        return () => {
-          mixerRuntime.ids = []
-          mixerRuntime.focus = () => {}
-          mixerRuntime.step = () => {}
-          mixerRuntime.toggleSolo = () => {}
-        }
+        /* The apply-scope shortcuts act on React state, so the panel publishes the live
+           order plus the two jump commands, and clears them on unmount: a keypress can
+           never act on a list from an unmounted panel (spec §5.6). */
+        view.publish(visible, {
+          focus: (sessionId) => setFocusId(sessionId),
+          step: (delta) => {
+            const ids = visible
+            if (ids.length === 0) return
+            const active = typeof document === 'undefined' || document.activeElement === null
+              || typeof document.activeElement.closest !== 'function'
+              ? null
+              : document.activeElement.closest('[data-mixer-pane]')
+            const currentId = active === null ? undefined : active.getAttribute('data-mixer-pane')
+            const index = currentId === undefined ? -1 : ids.indexOf(currentId)
+            const base = index === -1 ? (delta > 0 ? -1 : 0) : index
+            const target = ids[(base + delta + ids.length) % ids.length]
+            if (target !== undefined) setFocusId(target)
+          },
+        })
+        return () => { view.publish([]) }
       }, [channelsKey, listIdsKey])
       const attention = {}
       const states = {}
@@ -2077,7 +2134,7 @@ window.__ModuleLoader__.load({
       })
       const hiddenWaiting = parked.filter(id => attention[id] !== undefined).length
       const toggleChannel = (sessionId) => {
-        unpark(sessionId)
+        view.unpark(sessionId)
         if (currentBoard.includes(sessionId)) {
           actions.setChannels(currentBoard.filter(id => id !== sessionId))
           return
@@ -2086,11 +2143,11 @@ window.__ModuleLoader__.load({
       }
       const closeChannel = (sessionId) => {
         actions.setChannels(visible.filter(id => id !== sessionId))
-        park(sessionId)
+        view.park(sessionId)
       }
       const restoreHidden = () => {
-        actions.setChannels([...visible, ...parkedIds()])
-        unparkAll()
+        actions.setChannels([...visible, ...view.parkedIds()])
+        view.clearParked()
       }
       /* Requirement 2 (spec §4.1): the new channel goes FIRST, reusing a blank Session
          of the CLICKED workspace when there is one — the host does the same in
@@ -2099,7 +2156,7 @@ window.__ModuleLoader__.load({
          (2026-10-20: 「新建落点」 retired, spec §5.2). */
       const acceptNewChannel = (sessionId) => {
         refFor(sessionId)
-        unpark(sessionId)
+        view.unpark(sessionId)
         /* Until the host list catalogues it, this id is exempt from the prune below. */
         ledger.note(sessionId, 'born')
         actions.setChannels(moveChannel(channelsRef.current, sessionId, 0))
@@ -2197,7 +2254,7 @@ window.__ModuleLoader__.load({
             /* Keep the prune effect from dropping the restored channel again while the
                host snapshot still calls it archived. */
             ledger.note(record.sessionId, 'returned')
-            unpark(record.sessionId)
+            view.unpark(record.sessionId)
             const next = [...channelsRef.current]
             const at = Math.max(0, Math.min(record.index, next.length))
             next.splice(at, 0, record.sessionId)
@@ -2214,7 +2271,7 @@ window.__ModuleLoader__.load({
       const dropChannel = (sessionId, index) => {
         actions.setChannels(moveChannel(currentBoard, sessionId, index))
         /* Dropping a channel that was put away earlier brings it back. */
-        unpark(sessionId)
+        view.unpark(sessionId)
       }
       /* Dragging one divider only touches its two neighbours. The store persists on
          change, so the write rate is bounded by the drag itself. */
@@ -2376,6 +2433,7 @@ window.__ModuleLoader__.load({
       normalizeBoard,
       createChannelLedger,
       createHostCalls,
+      createViewState,
       moveChannel,
       heroFor,
       blankTargetFor,
@@ -2464,52 +2522,15 @@ window.__ModuleLoader__.load({
            Cordis' "without inject" failure path. */
         const unarchiveSession = (sessionId) => ctx.uiWorkspace.unarchiveSession(sessionId)
 
-        /* Solo (spec §5.7) is plugin-scope state for the same reason "put away" is: it
-           belongs to this sitting, must survive the reclaim remount (ADR-0003), and must
-           NOT be persisted — reopening the page returns to the plain side-by-side view. */
-        let solo = undefined
-        const soloId = () => solo
-        const setSolo = (sessionId) => { solo = sessionId }
-        const clearSolo = () => { solo = undefined }
-
-        /* "Put away with the x" is plugin-scope state: it must outlive a panel
-           remount (ADR-0003) without ever being persisted (spec §5.3). */
-        const parked = new Set()
-        const parkedIds = () => [...parked]
-        const park = (sessionId) => { parked.add(sessionId) }
-        const unpark = (sessionId) => { parked.delete(sessionId) }
-        const unparkAll = () => { parked.clear() }
-
-        /* Sessions THIS plugin created, until the host list catches up with them. The
-           prune effect drops channels that are gone from the list, and a freshly
-           created id is briefly absent from it — without this exemption the new channel
-           would be pruned away the instant it was added. The panel gets one handle
-           rather than the three operations as separate props. */
         /* Board membership lives in ONE module (spec §4.1): it holds the exemptions that
            keep a just-created or just-restored channel alive, and it owns the "gone" rule
            the panel's prune effects consult. Plugin scope, never persisted. */
         const ledger = createChannelLedger()
 
-        /* Shortcuts live in apply scope (registered once, with the plugin) but act on
-           React state (which channels exist, which one has the caret). The panel
-           publishes those three facts on every render and clears them on unmount, so a
-           keypress can never act on a stale list. Same handshake family as
-           `ledger` / `takePendingFirst` below. */
-        const mixerRuntime = {
-          ids: [],
-          focus: () => {},
-          step: () => {},
-          toggleSolo: () => {},
-        }
-
-        /* The reclaim handshake: the panel is about to be unmounted, so "this Session
-           goes first and owns the caret" waits here for the next mount. */
-        let pendingFirst = undefined
-        const takePendingFirst = () => {
-          const id = pendingFirst
-          pendingFirst = undefined
-          return id
-        }
+        /* Everything that must survive a panel remount but never a reload lives in ONE
+           module (spec §9.0j): solo, the channels put away with the x, the reclaim
+           hand-off, plus the channel order and jump commands the shortcuts need. */
+        const view = createViewState()
 
         /* Host new-session entrances (the 56px rail's own button, `session.new`)
            cannot be intercepted: they call `selectPanel(null)` on the way out. Take the
@@ -2548,7 +2569,7 @@ window.__ModuleLoader__.load({
           }
           const revealed = revealedMainView()
           if (!shouldReclaimPanel({ leftMixer, activePanelId, revealed })) return
-          pendingFirst = revealed.id
+          view.handOff(revealed.id)
           leftMixerAt = 0
           ctx.layout.selectPanel(PANEL_ID)
         }
@@ -2592,15 +2613,7 @@ window.__ModuleLoader__.load({
             archiveSession,
             unarchiveSession,
             ledger,
-            parkedIds,
-            soloId,
-            setSolo,
-            clearSolo,
-            park,
-            unpark,
-            unparkAll,
-            mixerRuntime,
-            takePendingFirst,
+            view,
             sidebar,
             /* Read the registered conversation views for the tab row. Guarded because
                `entries` is not part of the catalogued service face, even though
@@ -2672,11 +2685,11 @@ window.__ModuleLoader__.load({
         const mixerActive = () => ctx.layout.panelInfo.getSnapshot().activePanelId === PANEL_ID
         const jumpToChannel = (index) => () => {
           if (!mixerActive()) return { status: 'pass' }
-          const target = mixerRuntime.ids[index]
+          const target = view.channels()[index]
           if (target === undefined) {
             return { status: 'blocked', reason: `调音台里没有第 ${index + 1} 个通道` }
           }
-          return { status: 'handled', run: () => mixerRuntime.focus(target) }
+          return { status: 'handled', run: () => view.commands().focus(target) }
         }
         for (let index = 0; index < 9; index += 1) {
           ctx.effect(() => ctx.shortcuts.register({
@@ -2691,8 +2704,8 @@ window.__ModuleLoader__.load({
         }
         const stepChannel = (delta) => () => {
           if (!mixerActive()) return { status: 'pass' }
-          if (mixerRuntime.ids.length === 0) return { status: 'blocked', reason: '调音台里还没有通道' }
-          return { status: 'handled', run: () => mixerRuntime.step(delta) }
+          if (view.channels().length === 0) return { status: 'blocked', reason: '调音台里还没有通道' }
+          return { status: 'handled', run: () => view.commands().step(delta) }
         }
         /* Solo the channel the caret is in (spec §5.7). Registered like the jumps, so it
            is discoverable/rebindable; `KeyS` is free on all five profiles. */
@@ -2705,16 +2718,19 @@ window.__ModuleLoader__.load({
           modals: [],
           resolve: () => {
             if (!mixerActive()) return { status: 'pass' }
-            if (mixerRuntime.ids.length === 0) return { status: 'blocked', reason: '调音台里还没有通道' }
+            if (view.channels().length === 0) return { status: 'blocked', reason: '调音台里还没有通道' }
             const caret = typeof document === 'undefined' || document.activeElement === null
               || typeof document.activeElement.closest !== 'function'
               ? null
               : document.activeElement.closest('[data-mixer-pane]')
             const target = caret === null ? undefined : caret.getAttribute('data-mixer-pane')
-            if (target === null || target === undefined || mixerRuntime.ids.indexOf(target) === -1) {
+            if (target === null || target === undefined || view.channels().indexOf(target) === -1) {
               return { status: 'blocked', reason: '先把光标放进要 solo 的通道' }
             }
-            return { status: 'handled', run: () => mixerRuntime.toggleSolo(target) }
+            return {
+              status: 'handled',
+              run: () => view.setSolo(view.snapshot().solo === target ? undefined : target),
+            }
           },
         }), 'mixer: shortcut mixer.channel.solo')
 

@@ -20,6 +20,7 @@ const {
   normalizeBoard,
   createChannelLedger,
   createHostCalls,
+  createViewState,
   moveChannel,
   heroFor,
   blankTargetFor,
@@ -229,6 +230,55 @@ test('heroFor: a blank Session gets the host hero phase, everything else stays d
   assert.deepEqual(heroFor(undefined), { phase: 'active', hero: false })
   assert.deepEqual(heroFor(null), { phase: 'active', hero: false })
   assert.deepEqual(heroFor({}), { phase: 'active', hero: false })
+})
+
+/*
+ * Spec §9.0j: solo / 移出 / 重挂交接 were six handles with no way to announce a change,
+ * so the panel mirrored them and a second writer could forget the mirror.
+ */
+test('createViewState: one module owns solo, put-away and the remount hand-off', () => {
+  const view = createViewState()
+  let notifications = 0
+  const stop = view.subscribe(() => { notifications += 1 })
+
+  assert.deepEqual(view.snapshot(), { solo: undefined, parked: [], firstInLine: undefined })
+
+  /* Solo is one value: setting the same id again is not a change. */
+  view.setSolo('s1')
+  view.setSolo('s1')
+  assert.equal(notifications, 1)
+  assert.equal(view.snapshot().solo, 's1')
+
+  /* Put away is a set, and its mutations announce themselves — the bar no longer updates
+     only because an unrelated board write happened to notify. */
+  view.park('s2')
+  view.park('s2')
+  assert.deepEqual(view.parkedIds(), ['s2'])
+  assert.equal(notifications, 2)
+  view.unpark('gone')
+  assert.equal(notifications, 2)
+  view.unpark('s2')
+  assert.equal(notifications, 3)
+  view.park('s3')
+  view.clearParked()
+  assert.deepEqual(view.parkedIds(), [])
+  assert.equal(notifications, 5)
+
+  /* The remount hand-off is read exactly once (ADR-0003). */
+  view.handOff('s9')
+  assert.equal(view.take(), 's9')
+  assert.equal(view.take(), undefined)
+
+  /* Publishing the channel order and jump commands never notifies: it happens on every
+     render, and a notification there would schedule another render. */
+  const before = notifications
+  view.publish(['s1'], { focus: () => {}, step: () => {} })
+  assert.equal(notifications, before)
+  assert.deepEqual(view.channels(), ['s1'])
+
+  stop()
+  view.setSolo(undefined)
+  assert.equal(notifications, before)
 })
 
 /*
