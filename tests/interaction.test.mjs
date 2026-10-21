@@ -273,6 +273,20 @@ test('interaction: the caret hand-off waits for a composer that paints late (§5
   assert.equal(ui.document.activeElement, field)
 })
 
+test('interaction: creating a channel on a fresh board keeps the visible channels (§4.1)', async () => {
+  /* Found in a real browser (2026-10-21): with a never-touched board the persisted channel
+     list is empty while the view shows the fallback list, so the create path inserted into
+     an empty array and the mixer silently collapsed to the new channel alone. */
+  const ui = await loadInteractive()
+  ui.draw({ board: { channels: [], weights: {} }, list, status, workspaces })
+  assert.deepEqual(ui.$$('[data-mixer-cell]').map(node => node.getAttribute('data-mixer-cell')), ['s1', 's2', 's3'])
+
+  await createInWorkspace(ui, 'w1')
+  assert.deepEqual(ui.host.createCalls, [{ workspaceId: 'w1' }])
+  /* The new channel goes first and the three it replaced stay on the board. */
+  assert.deepEqual(ui.instance.getSnapshot().channels, ['created-1', 's1', 's2', 's3'])
+})
+
 test('interaction: a blank Session of the clicked workspace is reused, not recreated (§4.1)', async () => {
   const ui = await loadInteractive()
   const withBlank = {

@@ -2058,8 +2058,12 @@ window.__ModuleLoader__.load({
       /* The latest channel list, for callbacks that resolve a frame later (a create
          promise, the reclaim handover). A closure over `channels` would write back a
          stale order and silently drop anything the user toggled in between. */
-      const channelsRef = useRef(channels)
-      channelsRef.current = channels
+      /* What the user can actually see: the persisted channels, or — while the board has
+         never been touched — the fallback list of the first few Sessions. Async callers
+         must use this instead of the raw persisted array: on a fresh board that array is
+         empty, and inserting from it dropped every visible channel the moment a new one
+         was created from the panel (found in a real browser on 2026-10-21). */
+      const visibleRef = useRef(channels)
       const weightsRef = useRef(weights)
       weightsRef.current = weights
       /* Channels are ours (spec §4.1): until the user owns a board we show the first
@@ -2169,6 +2173,7 @@ window.__ModuleLoader__.load({
       }, [focusId, channelsKey])
 
       const visible = channels.length > 0 ? channels : listIds.slice(0, PANE_LIMIT)
+      visibleRef.current = visible
       const currentBoard = channels.length > 0 ? channels : visible
       const soloSummary = soloState === undefined ? undefined : summaries[soloState]
       /* Publish what the apply-scope shortcuts need (§5.6): the live channel order and the
@@ -2255,7 +2260,7 @@ window.__ModuleLoader__.load({
         view.unpark(sessionId)
         /* Until the host list catalogues it, this id is exempt from the prune below. */
         ledger.note(sessionId, 'born')
-        actions.setChannels(moveChannel(channelsRef.current, sessionId, 0))
+        actions.setChannels(moveChannel(visibleRef.current, sessionId, 0))
         setFocusId(sessionId)
       }
       const createChannel = (workspaceId) => {
@@ -2351,7 +2356,7 @@ window.__ModuleLoader__.load({
                host snapshot still calls it archived. */
             ledger.note(record.sessionId, 'returned')
             view.unpark(record.sessionId)
-            const next = [...channelsRef.current]
+            const next = [...visibleRef.current]
             const at = Math.max(0, Math.min(record.index, next.length))
             next.splice(at, 0, record.sessionId)
             actions.setChannels(next)
