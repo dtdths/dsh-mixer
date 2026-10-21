@@ -352,7 +352,7 @@ e.dataTransfer.setData('text/plain', node.id)   // node.id 就是 SessionId
 
 ## 6. 验证清单（装完怎么确认生效）
 
-0. **先跑自动化**：`npm run check`（语法 + **90 个用例**：纯函数缝 + 真 store 引擎 + 真 React（静态渲染与 jsdom 交互）+ 侧栏折叠 seam + 措辞对齐 + 宿主契约漂移哨兵 + 冷启动守卫）。这一条绿了再动浏览器 —— 它覆盖的是"冷启动会炸整页"和"注册事实静默丢失"这两类只有跑起来才看得见的问题。
+0. **先跑自动化**：`npm run check`（语法 + **95 个用例**：纯函数缝 + 真 store 引擎 + 真 React（静态渲染与 jsdom 交互）+ 侧栏折叠 seam + 措辞对齐 + 宿主契约漂移哨兵 + 冷启动守卫）。这一条绿了再动浏览器 —— 它覆盖的是"冷启动会炸整页"和"注册事实静默丢失"这两类只有跑起来才看得见的问题。
 1. **安装**：`plugin_manager` → `install_bundle`，target = **本包根目录**；确认返回 `application: applied` 且 `warnings` 为空。随后**把 `dsh-mixer-spike` 从 profile 卸掉**（否则原型与正式版同时注册 `main` 的 key、会话头按钮和 `/mixer`，行为不可预测）。
    **验收判据（profile 文件）**：`~/.dsh/profiles/web/package.json` 里应当只剩 `"dsh-mixer": "link:/Users/user/Documents/code/d/dsh-mixer"` 这一条 mixer 依赖，且 `dsh.profile.bundles` 里只列 `dsh-mixer`、**不含** `dsh-mixer-spike`（装之前那里写的是 spike）。
 2. **冷启动**（关键，别用热重载代替）：**硬刷新**页面，确认**没有** `Failed to load plugins` / `web boot: N entry did not activate`。任何 `apply()` 改动都必须重做这一步。
@@ -542,6 +542,20 @@ agent 侧可复核的旁证（**只证明注册事实，不替代本清单的观
 | 3 | **被 solo 的通道消失（归档/剪枝）→ 自动退出 solo**；新建会话照常插到第 0 位且不抢走 solo；solo 期间暂停分界线与头部拖动 | §5.7 |
 | 4 | **不持久化**：状态放插件作用域（跨重挂存活、刷新回并排），宽度权重全程不动 | §5.7 |
 
+### 9.0j 2026-10-21 第十五轮：架构评审落地（A–E）
+
+一次 `/improve-codebase-architecture` 走查（`git log` 近 40 次提交定位热点 + 主线与子代理各一遍 + 交叉核对）产出五个候选，用户要求按强度顺序全部落地。原则：**纯重构，行为不变**；单文件约束内做 seam；不碰 ADR-0001–0003。
+
+| # | 候选 | 强度 | 落地（module） | 判据 |
+| --- | --- | --- | --- | --- |
+| A | 「谁还在板上」没有单一所有者：一条规则拆成 2 个 effect + 3 个豁免集合 + 6 个写入点，两个豁免句柄逐字重复 | Strong | `createChannelLedger()`：豁免记**原因**（born / returned），`survivors` / `staleWeights` 是唯一定义 | §11 缝表 · `seams` 用例 |
+| B | 「点了不能没反应」被手抄三遍（各含五种结局） | Strong | `createHostCalls()`：五种结局各一次，调用点只声明特有事实 | §11 · `seams` 用例 |
+| C | 6 个握手对象（18 成员、11 prop）+ React 镜像 + ref 缓存 | Strong | `createViewState()`：可订阅，自己发通知；面板 props 25 → 16 | §5.6 / §5.7 / §11 |
+| D | 「光标在哪个通道 / 找通道 / 聚焦它」手写三遍，虚影又重推一遍 pane 部件 | Worth exploring | `createChannelDom(doc?)`：`data-mixer-*` 与宿主钩子只在此拼写；`focus()` 的 false 是帧重试信号。**CSS 半边不动**（仍 Speculative） | §11 · `seams` 用例 |
+| E | 宿主被建模三次，加一条服务边要改三处且副本之间无哨兵 | Worth exploring | `tests/host-face.mjs`：fixture 共享、断言不共享；`boot-check` 仍走真 Cordis 且保留 control | §11 · `host-contract` 哨兵 |
+
+**评审里明确没做的**：不拆 `client.js`（宿主只加载这一个文件）；不给 CSS 注入规则建 adapter（宿主类名/钩子改名仍需人工核对，Speculative）；不把 `host-contract` 的断言搬进 fixture（否则错的假设会同时通过两边）。
+
 ### 9.1 仍开放
 
 - **钉住视图不写会话记忆**（§4.4 边界）：要"点了就记住"，需上游暴露 store 或 `selectView` 动作。
@@ -572,12 +586,12 @@ agent 侧可复核的旁证（**只证明注册事实，不替代本清单的观
 | --- | --- |
 | `client.js` | 单文件 Client half（模块加载器只认这一个文件，所以缝只能是文件内的纯函数） |
 | `boot-check.mjs` | 冷启动守卫：真实 Cordis Context + 对照项，并断言 `main` 的 session 子槽与 board store |
-| `tests/seams.test.mjs` | `node --test` 覆盖 14 个纯函数缝 + 1 张文案表（21 个用例）；`client.js` 的返回值多挂一个 `__test` 字段把这些缝暴露给测试（宿主只读 `inject` / `apply`，其余键被忽略） |
+| `tests/seams.test.mjs` | `node --test` 覆盖 19 个纯函数缝 / module + 1 张文案表（24 个用例）；`client.js` 的返回值多挂一个 `__test` 字段把这些缝暴露给测试（宿主只读 `inject` / `apply`，其余键被忽略） |
 | `tests/render.test.mjs` | 用**宿主的真 React + react-dom/server** 把面板渲染成静态 HTML（10 个用例）：状态标记、面包屑、每格工厂内容、分栏把手、宽度落到 flex、空态、状态回落、**空会话必须拿到 hero 相位**、缺 store 的降级路径。纯函数测试看不见 React 层，靠这一层补 |
 | `tests/interaction.test.mjs` | 把面板挂进 **jsdom + react-dom/client**，用真事件驱动（35 个用例）：× 关闭后停靠并可从顶栏放回（且 retain 未释放）、`会话` 浮层勾选写 board 与本地标题过滤、**左列行点击只把右列滚到该工作区、不导航，且行 hover 的「＋会话」在该工作区建会话并落第 0 位**、**新建走 `ctx.sessions.create` 并置顶 + 光标落在新格**、**刚新建完的主动离开不被抢回**、**复用同工作区空白会话**、**宿主入口的窄条件抢回（主动离开不抢）**、`Esc`/再点触发器/点浮层外三种关闭、**顶栏不出现工作区名而面板里出现**、**新建失败在顶栏可见**、**光标交接等迟到的 composer**、**触发器要有按钮样式**、**点左列工作区滚动右列**、**归档会话不在列表里**、**悬停出行尾归档且归档后该格关掉**、**正在执行先问一次再停止并归档**、**归档抛错/缺 API 都要出提示**、**归档进行中显示"归档中…"**、**归档后 6s 可撤销：通道回到原位置 + 原宽度、只保留最新一条、拒绝/缺方法都出提示**、**通道间跳转快捷键：注册 12 条、跳到第 N 个通道并聚焦、未打开时不吞键、越界与无通道给提示、next/prev 首尾环绕**、**solo：进入后其余通道变窄条、点窄条切换、退出后宽度权重不变、被 solo 的通道消失则自动退出、快捷键按光标所在通道 solo（无光标时给提示）**、视图标签经工厂 seam 钉住 view、焦点标记、拖分界线（比例 + 380 夹紧 + 收尾）、头部拖动载荷（含**同尺寸替身虚影**：真实头部克隆、身体按 `bodyFitsCell` 克隆或骨架、离屏、下一个 task 移除，与 `.4` 占位）与「从 × 起拖被拒」、**空会话虚影保留 hero 与 composer**、**越界通道的虚影身体是骨架**、轨道 drop 重排并拒收非会话负载、**拖动时同宽空槽（让位）** |
 | `tests/store.test.mjs` | 用**宿主的真 store 引擎**跑持久化（5 个用例）：键名与 root 无后缀、坏数据逐字段兜底、第二个实例恢复、无 localStorage 时的可用性 |
 | `tests/sidebar.test.mjs` / `tests/labels.test.mjs` | 折叠幂等（5 个）与措辞对齐宿主字典（5 个） |
-| `tests/host-contract.test.mjs` | **宿主契约漂移哨兵**（9 个）：`external` 的名字仍在该 checkout 的平台静态表与 seed 表里、`inject` 每条边都指向真实存在的包、slot 注册仍提供 `store` 与 session 子槽座位、root store 仍以无 key 方式实例化、侧栏行状态的四个事实与三种 kind 仍在、轮次导航仍由容器查询隐藏、归档撤销仍走 `unarchiveSession` 且 toast hold 仍是 6000ms、快捷键注册表 `Shortcuts.register` 的形状与区域仍未变、**每条默认键位都过宿主自己的 `bindingIssue` / 冲突判据（五个 profile 全部）**。其中前两条与最后一条是真检查（能真失败），其余是锚点检查（命中 = 机制还在，不等于行为不变） |
+| `tests/host-contract.test.mjs` | **宿主契约漂移哨兵**（11 个）：`external` 的名字仍在该 checkout 的平台静态表与 seed 表里、`inject` 每条边都指向真实存在的包、slot 注册仍提供 `store` 与 session 子槽座位、root store 仍以无 key 方式实例化、侧栏行状态的四个事实与三种 kind 仍在、轮次导航仍由容器查询隐藏、归档撤销仍走 `unarchiveSession` 且 toast hold 仍是 6000ms、快捷键注册表 `Shortcuts.register` 的形状与区域仍未变、**每条默认键位都过宿主自己的 `bindingIssue` / 冲突判据（五个 profile 全部）**、**注入名单与 `tests/host-face.mjs` 的 `HOST_SERVICES` 完全一致且 fake 真的提供每个服务**。其中前两条与最后一条是真检查（能真失败），其余是锚点检查（命中 = 机制还在，不等于行为不变） |
 | `package.json` | `dsh.client.external` = store + primitives；`inject` = shortcuts / commands / conversation / layout / workspace（Cordis 服务边：slots / sessions / layout / uiWorkspace / shortcuts）；脚本 `test` / `boot-check` / `check` |
 
 **换宿主怎么验**（拉新 DSH 分支、或换一个 checkout 构建运行之后）：
@@ -615,10 +629,14 @@ DSH_REPO=/新的/checkout 路径 npm run check
 | `blankTargetFor(list, workspace, archivedIds)` | 复用同工作区空白会话的挑选（§4.1，需求2） |
 | `shouldReclaimPanel({ leftMixer, activePanelId, revealed })` | 窄条件抢回面板（§5.1 / ADR-0003，需求2）：`revealed = { id, blank }` 来自宿主 `mainView` |
 | `archiveActivityOf(reason)` | 宿主"正在执行"拒绝的识别（§5.2，第四轮）：按错误名 `WorkspaceArchiveError` + `workspace/session-active`，与 ui-workspace 同判据 |
+| `createChannelLedger()` | **板成员账本**（§4.1 / §9.0j）：`note/forget/reasonOf/graduate/survivors/staleWeights`。「什么算 gone」的唯一定义；豁免记原因（`born` / `returned`）而不是布尔，因为两者毕业时机不同 |
+| `createHostCalls({notify, pending})` | **宿主调用结局 runner**（§5.2 / §9.0j）：缺方法 / 同步抛 / 拒绝 / 可确认的拒绝 / 成功，五种结局各一次；返回 `run(spec)`，调用点只声明自己特有的事实 |
+| `createViewState()` | **插件作用域视图状态**（§5.6 / §5.7 / §9.0j）：`subscribe/snapshot/setSolo/park/unpark/clearParked/parkedIds/handOff/take/publish/channels/commands`。solo + 移出 + 重挂交接的唯一所有者，自己发通知 |
+| `createChannelDom(doc?)` | **通道 DOM adapter**（§9.0j）：`channelOf/caretChannel/paneOf/headOf/tabsOf/bodyOf/scrollerOf/fieldOf/reveal/focus`。`data-mixer-*` 与宿主钩子只在这里拼写；`focus` 返回 false 表示 composer 还没上屏（面板据此帧重试） |
 
 另有四条行为常量，**只在文档与代码注释里约定、不进 `__test`**（它们不是判断，是时序参数，钉一个数字等于写同义反复）：`FOCUS_RETRY_FRAMES = 30`（光标交接等宿主 composer 出现的帧数上限，§5.1③）、`RECLAIM_WINDOW_MS = 2000`（抢回判据的时效窗，§5.1）、`HERO_LIFT_PX = 48`（空会话 hero 的光学上调，§4.4）与 `ARCHIVE_UNDO_MS = 6000`（归档撤销的时效窗，镜像宿主 toast 的 hold，§5.2）。
 
-后 4 条是 2026-10-15 第二轮新增（需求 1 / 2 / 4）。**用例数已落地**：v1 的 53 例 + 第二轮 15 例 = **68 例**全绿（`seams` +4、`render` +1、`interaction` +10）；第三轮再 +1（`interaction` 的「触发器要有按钮样」）；第四轮 +4（`seams` 的 `archiveActivityOf` + `interaction` 的归档过滤 / 悬停归档 / 停止并归档）；第五轮 +2（归档同步抛错 / 未提供 `archiveSession` 都要出提示，以及 `归档中…` 的进行中态）；第六轮 +1（`host-contract` 的 inject 名单哨兵）；第七轮 +1（`interaction` 的「替身虚影同尺寸/带真实头部/下一个 task 撤销」）；第八轮 +2（`interaction` 的「空会话虚影保留 hero 与 composer」「越界通道的虚影身体是骨架」）；第十一轮 **−1**（`landingWorkspace` 缝随「新建落点」退休一并删除，`interaction` 的左列用例原地改写为「跳转 + 行内新建」）；第十二轮 +4（`interaction` 的归档撤销三例：回原位/回宽度、失败与缺方法、只保留最新一条；`host-contract` 的归档撤销锚点）；第十三轮 +4（`interaction` 的通道跳转三例：跳第 N 个并聚焦、不吞键与越界提示、next/prev 首尾环绕；`host-contract` 的快捷键注册表锚点）；同轮修 +1（`host-contract` 的「默认键位过宿主校验」）；第十四轮 +3（`interaction` 的 solo 三例）= **90 例**。`tests/harness.mjs` 的假宿主已补齐 `ctx.sessions.create` 的记录、`sessions.list` / `layout.panelInfo` 两个可订阅源（含 `setList` / `setPanelInfo` 驱动），并且 `useStore` 改成真的订阅 + 版本号重渲染——原来只读快照，导致"面板自己的写入"在测试里根本不会触发重渲染，`×` 关闭那条用例是靠别的原因才过的。
+后 4 条是 2026-10-15 第二轮新增（需求 1 / 2 / 4）。**用例数已落地**：v1 的 53 例 + 第二轮 15 例 = **68 例**全绿（`seams` +4、`render` +1、`interaction` +10）；第三轮再 +1（`interaction` 的「触发器要有按钮样」）；第四轮 +4（`seams` 的 `archiveActivityOf` + `interaction` 的归档过滤 / 悬停归档 / 停止并归档）；第五轮 +2（归档同步抛错 / 未提供 `archiveSession` 都要出提示，以及 `归档中…` 的进行中态）；第六轮 +1（`host-contract` 的 inject 名单哨兵）；第七轮 +1（`interaction` 的「替身虚影同尺寸/带真实头部/下一个 task 撤销」）；第八轮 +2（`interaction` 的「空会话虚影保留 hero 与 composer」「越界通道的虚影身体是骨架」）；第十一轮 **−1**（`landingWorkspace` 缝随「新建落点」退休一并删除，`interaction` 的左列用例原地改写为「跳转 + 行内新建」）；第十二轮 +4（`interaction` 的归档撤销三例：回原位/回宽度、失败与缺方法、只保留最新一条；`host-contract` 的归档撤销锚点）；第十三轮 +4（`interaction` 的通道跳转三例：跳第 N 个并聚焦、不吞键与越界提示、next/prev 首尾环绕；`host-contract` 的快捷键注册表锚点）；同轮修 +1（`host-contract` 的「默认键位过宿主校验」）；第十四轮 +3（`interaction` 的 solo 三例）；**第十五轮（架构评审落地）** +5（`seams` 新增 ledger / runner / view state / DOM adapter 四例 —— 每例把一个 module 的规则一次钉住；`host-contract` 新增 host-face 名单一致性哨兵）= **95 例**。`tests/harness.mjs` 的假宿主已补齐 `ctx.sessions.create` 的记录、`sessions.list` / `layout.panelInfo` 两个可订阅源（含 `setList` / `setPanelInfo` 驱动），并且 `useStore` 改成真的订阅 + 版本号重渲染——原来只读快照，导致"面板自己的写入"在测试里根本不会触发重渲染，`×` 关闭那条用例是靠别的原因才过的。
 
 **验证**：`npm run check`（语法 + **53 个用例** + 冷启动）在本机全绿；**浏览器行为已由用户按 §6 十条在根包上验收通过**（2026-10-15，装根包 + 卸 `dsh-mixer-spike` + 硬刷新；见 §6 验收记录）。
 **第二轮（需求 1–4）实现后的验证**：`npm run check` = **76 个用例全绿** + 冷启动 `PASS`（2026-10-15）；**§6 第 12–20 条属观感项，由用户在浏览器里逐条验收** —— 尤其"整格虚影"与"让位"两处只有真拖拽能验。
@@ -634,6 +652,8 @@ DSH_REPO=/新的/checkout 路径 npm run check
 **发布 v1.2.0（2026-10-20，归档可撤销）**：`package.json` bump 到 `1.2.0`，`main` fast-forward，tag **`v1.2.0`** + GitHub Release。内容：顶栏 6s `撤销`（`ARCHIVE_UNDO_MS`）、通道回原位/回宽度、`restoredSessions` 剪枝豁免（§9.0g / §5.2 / §4.1）；`npm run check` = 82 用例 + 冷启动 `PASS`。
 
 **发布 v1.1.0（2026-10-20，发布后一轮交互改版）**：`package.json` bump 到 `1.1.0`，`main` fast-forward 到本点，tag **`v1.1.0`** + GitHub Release。内容：`会话` 浮层的新建入口挪进左列每个工作区行（hover 出 `＋会话`，§9.0f 第 1–2 行）、左列行 hover 与行内动作按钮的平常/hover 两态改用可见 token（§9.0f 第 3–4 行）；`npm run check` = 78 用例 + 冷启动 `PASS`，用户浏览器逐项验收通过。
+
+**第十五轮（2026-10-21，架构评审：五个 module 深化）**：`npm run check` = **95 个用例 + 冷启动 `PASS`**。按评审报告的强度顺序落地 A→E（§9.0j）：成员账本、宿主调用结局 runner、插件作用域视图状态、通道 DOM adapter、单一 host fixture。**纯重构**：行为不变，但把「什么算 gone」「点了不能没反应」「活过重挂的状态」「DOM 词汇」「宿主服务表」各收进一个 module，并各配一条 seam 用例。面板 props 由 25 降到 16（握手类 11 → 2）。**待用户浏览器复验**（尤其归档撤销、solo、通道跳转三条路径）。
 
 **第十四轮（2026-10-20，solo，issue #12）**：`npm run check` = **90 个用例 + 冷启动 `PASS`**（`boot-check` 的快捷键断言同步到 12 条）。窄条 64px + 状态点、三处进出（头部按钮 / 顶栏 chip / `Cmd/Ctrl+Alt+S`）、被 solo 的通道消失则自动退出、不持久化（§5.7 / §9.0i）。**用户浏览器验收通过**；同轮按反馈补了窄条的分界（凹陷表面 + 1px 分界线 + 主色标题，§9.0i 第 1b 行）。
 
