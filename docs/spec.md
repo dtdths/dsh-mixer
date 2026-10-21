@@ -16,7 +16,7 @@
 - 语音 / 多媒体通道。
 - **UI 文案接 locale 服务**（用户 2026-10-15 定：留作二期）。本期文案硬编码中文，见 §9。
 
-**交付形态**：只装 Client half，**不发布 npm**（`package.json` 是 `private: true`）。三条安装路径：仓库目录 `link:`（开发、热更新）/ git tag `github:dtdths/dsh-mixer#vN.N.N`（冻结版本）/ `.tgz`（离线）。**当前发布版 `v1.4.0`**（此前 `v1.3.0` / `v1.2.0` / `v1.1.0` / `v1.0.0`）：`main` 与 `feat/mixer-v1` 同点，GitHub Release 里有安装命令与验证过的 DSH runtime 版本；步骤见 `README.md`「安装」「发布」。
+**交付形态**：只装 Client half，**不发布 npm**（`package.json` 是 `private: true`）。三条安装路径：仓库目录 `link:`（开发、热更新）/ git tag `github:dtdths/dsh-mixer#vN.N.N`（冻结版本）/ `.tgz`（离线）。**当前发布版 `v1.5.0`**（此前 `v1.4.0` / `v1.3.0` / `v1.2.0` / `v1.1.0` / `v1.0.0`）：`main` 与 `feat/mixer-v1` 同点，GitHub Release 里有安装命令与验证过的 DSH runtime 版本；步骤见 `README.md`「安装」「发布」。
 
 ## 2. 包结构
 
@@ -646,6 +646,8 @@ DSH_REPO=/新的/checkout 路径 npm run check
 **第三至六轮（浏览器实测 → 修复）的验收记录（2026-10-15）**：用户在浏览器里逐轮实测并回报。**已确认可用**：§6.17 顶栏可读性、§6.18 浮层跳转、§6.19 归档过滤、§6.20 面板内归档（含"正在执行先问一次"）—— 最后一轮修掉了 `uiWorkspace` 缺失的**服务边**（见 §9.0c 第 6 行），用户复测「正常了」。
 
 **发布 v1.0.0（2026-10-20）**：`package.json` bump 到 `1.0.0`，`main` fast-forward 到与 `feat/mixer-v1` 同点，打 annotated tag **`v1.0.0`**，GitHub Release 附安装命令（`install_bundle target = "github:dtdths/dsh-mixer#v1.0.0"`）与验证过的 DSH runtime 版本（`0.2.1-alpha.1` / checkout `5badb15`）。发版前 `npm run check` = 79 用例 + 冷启动 `PASS`。
+
+**发布 v1.5.0（2026-10-21，架构重构 + 光标落末尾）**：`package.json` bump 到 `1.5.0`，`main` fast-forward，tag **`v1.5.0`** + GitHub Release。内容：五个 module 深化（成员账本 / 宿主调用 runner / 插件作用域视图状态 / 通道 DOM adapter / 单一 host fixture，§9.0j）—— **纯重构、行为不变**；外加跳转后光标落在草稿末尾。`npm run check` = 95 用例 + 冷启动 `PASS`，用户浏览器复验归档撤销 / solo / 跳转三条路径与光标位置均通过。
 
 **发布 v1.4.0（2026-10-20，solo）**：`package.json` bump 到 `1.4.0`，`main` fast-forward，tag **`v1.4.0`** + GitHub Release。内容：solo（64px 窄条 + 状态点、三处进出、被 solo 的通道消失则自动退出、不持久化、窄条与主通道的分界）与 `mixer.channel.solo` 快捷键；`npm run check` = 90 用例 + 冷启动 `PASS`，用户浏览器验收通过。
 
