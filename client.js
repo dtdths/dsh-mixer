@@ -329,8 +329,35 @@ window.__ModuleLoader__.load({
           }
           return true
         },
-        /* Focus the channel's field, revealing it first. Returns false when the pane or
-           its composer is not in the DOM yet — the caller retries across frames. */
+        /* Put the caret at the END of whatever the user already typed. Jumping to a
+           channel is "continue this conversation", so landing before the existing text
+           would make every jump start over (user feedback 2026-10-21). Both composer
+           shapes are covered: a plain field (`setSelectionRange`) and the host's rich
+           contenteditable (`Range` collapsed at the end of its contents). */
+        caretToEnd(field) {
+          if (field === null || field === undefined) return
+          if (typeof field.value === 'string' && typeof field.setSelectionRange === 'function') {
+            try {
+              field.setSelectionRange(field.value.length, field.value.length)
+              return
+            } catch (error) {
+              /* Some input types refuse a selection range; the focus itself still holds. */
+            }
+          }
+          if (field.isContentEditable !== true) return
+          const doc = documentOf()
+          if (doc === undefined || typeof doc.createRange !== 'function' || typeof doc.getSelection !== 'function') return
+          const range = doc.createRange()
+          range.selectNodeContents(field)
+          range.collapse(false)
+          const selection = doc.getSelection()
+          if (selection === null) return
+          selection.removeAllRanges()
+          selection.addRange(range)
+        },
+        /* Focus the channel's field, revealing it first and continuing at the end of the
+           draft. Returns false when the pane or its composer is not in the DOM yet — the
+           caller retries across frames. */
         focus(sessionId) {
           const pane = paneOf(sessionId)
           if (pane === undefined) return false
@@ -338,6 +365,7 @@ window.__ModuleLoader__.load({
           const field = this.fieldOf(pane)
           if (field === null || typeof field.focus !== 'function') return false
           field.focus()
+          this.caretToEnd(field)
           return true
         },
       }

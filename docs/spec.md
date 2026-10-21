@@ -327,9 +327,9 @@ e.dataTransfer.setData('text/plain', node.id)   // node.id 就是 SessionId
   2. **macOS 的 OS 级抢占**：`Cmd+Option+←/→` 是系统媒体键（上一首 / 下一首），**OS 在页面之前收走按键**（用户实测：按了之后音乐 App 换歌，通道不动）。这类冲突页面侧无解，只能避开。
   方括号两个坑都不占，且各键盘布局都按得到。
 - **区域**：`regions: ['page', 'editable']` —— 光标在某个通道的输入框里时也能跳（那正是调音台用户的常态）；`modals: []`。
-- **行为**：跳转 = 把目标通道**滚动到可见**（`scrollIntoView({ block: 'nearest', inline: 'nearest' })`）并把焦点交到它的输入框（复用 §5.1③ 的焦点交接机制，含迟到的 composer）。`next`/`prev` 从**当前焦点所在通道**出发并**首尾环绕**；焦点不在任何通道时从第一个（next）/最后一个（prev）开始。
+- **行为**：跳转 = 把目标通道**滚动到可见**（`scrollIntoView({ block: 'nearest', inline: 'nearest' })`）并把焦点交到它的输入框（复用 §5.1③ 的焦点交接机制，含迟到的 composer）。**光标落在草稿末尾**（2026-10-21 用户反馈：跳过去是要接着写，落在开头等于每次都要重新定位）：plain 输入框用 `setSelectionRange(len, len)`（个别 `type` 会抛，包在 try 里、不影响聚焦），宿主的富文本 composer 用 `Range` + `collapse(false)` 折到内容末尾；两种形态都由 `createChannelDom().caretToEnd(field)` 一处处理。`next`/`prev` 从**当前焦点所在通道**出发并**首尾环绕**；焦点不在任何通道时从第一个（next）/最后一个（prev）开始。
 - **不用时不吞键**：调音台不是当前面板 → `resolve` 返回 `pass`（不消费按键）；调音台在、但没有第 N 个通道 → `blocked` + 原因（宿主的词汇，不是静默无效）。
-- **跨作用域的桥**：快捷键在 `apply` 作用域注册（随插件一次），但它要作用于 React 状态（哪些通道、焦点在哪）。面板每次渲染 publish 一个 `mixerRuntime`（`ids` / `focus` / `step`），卸载即清空 —— 键击永远不会作用在过期列表上（与 `createdSessions` 同族的握手）。
+- **跨作用域的桥**：快捷键在 `apply` 作用域注册（随插件一次），但它要作用于 React 状态（哪些通道、焦点在哪）。面板在每次渲染时把**实时通道顺序与两个跳转命令** publish 给插件作用域的 `view`（`createViewState().publish`），卸载即清空 —— 键击永远不会作用在过期列表上（§9.0j 的 module）。
 - ⚠️ **服务边**：`inject` 增加 `'shortcuts'`，`package.json` 的加载顺序边同步加 `@deepseek-ai/dsh-client-shortcuts`；`boot-check.mjs` 的假 context 必须 `provide('shortcuts')`，并断言 12 条命令都在冷启动时注册成功（缺一条 = 静默少一个快捷键）。
 - ⚠️ **假注册表挡不住宿主的校验**：`boot-check.mjs` / `tests/harness.mjs` 的 `register` 收什么都收，所以"12 条都注册了"并不等于"宿主会接受它们"。真判据在 `tests/host-contract.test.mjs` 的 `host registry accepts every shortcut default we register`：从 checkout 里跑宿主自己的 `bindingIssue` / `isWebBindingAllowed` / `resolveShortcutDefault` / `overlappingBindings`，逐个 profile 验证插件的每条默认键位（含我们自己命令之间的撞键）。
 
@@ -380,7 +380,7 @@ e.dataTransfer.setData('text/plain', node.id)   // node.id 就是 SessionId
 20. **面板内归档**（第四轮）：指针移到某会话行 → 行尾出现 `归档` → 点它：安静会话直接归档（侧边栏同一套动作）；**正在执行**的会话先在该行下方问一次，点 `停止并归档` 才动手，点 `取消` 什么都不发生。
 21. **归档可撤销**（2026-10-20，issue #12）：归档一个通道 → 顶栏出现 `已归档「…」撤销`；点 `撤销` → 会话回到原工作区、通道回到**原位置**且宽度不变；**6 秒**不点则 chip 自行消失；撤销失败（宿主拒绝/没提供方法）在顶栏有可见提示。
 23. **solo**（2026-10-20，§5.7）：点通道头部的 `solo`（或 `Cmd/Ctrl+Alt+S`）→ 该通道占满、其余压成 64px 窄条；窄条**与主通道一眼可分**（凹陷表面 + 1px 分界线 + 主色标题，浅色主题下也看得出来），状态点仍准确；点窄条切到那个通道；顶栏 `solo：… 退出` 或再按一次回到并排，**各通道宽度与 solo 前一致**；solo 期间拖不动分界线也拖不动头部排序；把被 solo 的通道归档 → solo 自动结束；刷新页面 → 回到并排（不持久化）。
-24. **通道间跳转快捷键**（2026-10-20，§5.6）：调音台打开时按 `Cmd/Ctrl+Alt+1..9` → 焦点落到第 N 个通道的输入框（越界的通道给提示、不静默）；`Cmd/Ctrl+Alt+]` / `[` 从当前通道出发下/上一个并首尾环绕（**全平台同一套**；不要用 `Cmd+Option+←/→`，那是 macOS 的媒体键）；**调音台没打开时按键不被吞**；在 DSH 的快捷键设置里能看到并改这 12 条命令。
+24. **通道间跳转快捷键**（2026-10-20，§5.6）：调音台打开时按 `Cmd/Ctrl+Alt+1..9` → 焦点落到第 N 个通道的输入框、**光标在草稿末尾**（继续写，而不是从头来；越界的通道给提示、不静默）；`Cmd/Ctrl+Alt+]` / `[` 从当前通道出发下/上一个并首尾环绕（**全平台同一套**；不要用 `Cmd+Option+←/→`，那是 macOS 的媒体键）；**调音台没打开时按键不被吞**；在 DSH 的快捷键设置里能看到并改这 12 条命令。
 
 **验收记录（v1，2026-10-15，用户实测）**：在根包（`feat/mixer-v1` @ `5c8314b`，profile `web` 只装 `dsh-mixer`）上完成 —— 硬刷新冷启动**没有** `Failed to load plugins` / `web boot: N entry did not activate`；第 3–10 条逐条通过（含五档状态与左侧会话行逐档一致、持久化、归档联动、退出复原）。
 
@@ -553,6 +553,8 @@ agent 侧可复核的旁证（**只证明注册事实，不替代本清单的观
 | C | 6 个握手对象（18 成员、11 prop）+ React 镜像 + ref 缓存 | Strong | `createViewState()`：可订阅，自己发通知；面板 props 25 → 16 | §5.6 / §5.7 / §11 |
 | D | 「光标在哪个通道 / 找通道 / 聚焦它」手写三遍，虚影又重推一遍 pane 部件 | Worth exploring | `createChannelDom(doc?)`：`data-mixer-*` 与宿主钩子只在此拼写；`focus()` 的 false 是帧重试信号。**CSS 半边不动**（仍 Speculative） | §11 · `seams` 用例 |
 | E | 宿主被建模三次，加一条服务边要改三处且副本之间无哨兵 | Worth exploring | `tests/host-face.mjs`：fixture 共享、断言不共享；`boot-check` 仍走真 Cordis 且保留 control | §11 · `host-contract` 哨兵 |
+
+**同轮追加（用户反馈 2026-10-21）**：跳转 / 新建交接之后**光标落在草稿末尾** —— 由 `createChannelDom().caretToEnd(field)` 处理两种 composer 形态（plain `setSelectionRange` / 富文本 `Range.collapse(false)`），验收写进 §5.6 与 §6.24。
 
 **评审里明确没做的**：不拆 `client.js`（宿主只加载这一个文件）；不给 CSS 注入规则建 adapter（宿主类名/钩子改名仍需人工核对，Speculative）；不把 `host-contract` 的断言搬进 fixture（否则错的假设会同时通过两边）。
 

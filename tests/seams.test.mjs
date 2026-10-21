@@ -239,7 +239,30 @@ test('heroFor: a blank Session gets the host hero phase, everything else stays d
  */
 test('createChannelDom: one owner for channel lookup, caret and focus', () => {
   const focused = []
+  const selections = []
+  const ranges = []
   const fieldFor = () => ({ focus: () => focused.push('field') })
+  /* The two composer shapes: a plain field whose caret must land after the draft, and the
+     host's rich contenteditable whose Range must collapse at the end of its contents. */
+  const typedField = {
+    value: '草稿两行',
+    focus: () => focused.push('typed'),
+    setSelectionRange: (start, end) => selections.push([start, end]),
+  }
+  const richField = {
+    isContentEditable: true,
+    focus: () => focused.push('rich'),
+  }
+  const richPane = {
+    getAttribute: () => 'c',
+    querySelector: selector => (selector === '[contenteditable="true"]' ? richField : null),
+    closest: () => null,
+  }
+  const typedPane = {
+    getAttribute: () => 't',
+    querySelector: selector => (selector === 'input, textarea' ? typedField : null),
+    closest: () => null,
+  }
   const paneFor = id => ({
     getAttribute: name => (name === 'data-mixer-pane' ? id : null),
     querySelector: selector => (selector === '[contenteditable="true"]' ? fieldFor() : null),
@@ -248,7 +271,15 @@ test('createChannelDom: one owner for channel lookup, caret and focus', () => {
   const paneA = paneFor('a')
   const paneB = paneFor('b')
   const fieldB = { closest: selector => (selector === '[data-mixer-pane]' ? paneB : null) }
-  const doc = { querySelectorAll: selector => (selector === '[data-mixer-pane]' ? [paneA, paneB] : []), activeElement: fieldB }
+  const doc = {
+    querySelectorAll: selector => (selector === '[data-mixer-pane]' ? [paneA, paneB, typedPane, richPane] : []),
+    activeElement: fieldB,
+    createRange: () => ({
+      selectNodeContents: node => ranges.push(['select', node]),
+      collapse: atEnd => ranges.push(['collapse', atEnd]),
+    }),
+    getSelection: () => ({ removeAllRanges: () => ranges.push(['remove']), addRange: () => ranges.push(['add']) }),
+  }
   const dom = createChannelDom(doc)
 
   /* Which channel an element belongs to (and nothing when it belongs to none). */
@@ -263,6 +294,13 @@ test('createChannelDom: one owner for channel lookup, caret and focus', () => {
   assert.equal(focused.length, 1)
   assert.equal(dom.focus('missing'), false)
   assert.equal(focused.length, 1)
+
+  /* Jumping to a channel continues the draft: the caret lands AFTER the existing text,
+     in both composer shapes (user feedback 2026-10-21). */
+  assert.equal(dom.focus('t'), true)
+  assert.deepEqual(selections, [[typedField.value.length, typedField.value.length]])
+  assert.equal(dom.focus('c'), true)
+  assert.deepEqual(ranges.filter(step => step[0] === 'collapse'), [['collapse', false]])
 
   /* Without a document (server rendering) every read is empty instead of throwing. */
   const headless = createChannelDom({})
