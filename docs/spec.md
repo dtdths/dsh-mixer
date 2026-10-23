@@ -681,6 +681,14 @@ DSH_REPO=/新的/checkout 路径 npm run check
 （与宿主会话行退出同一条路径），`interaction` 新增一条用例钉住参数。**调音台视图内**的文件链接仍受
 宿主限制（§7.4 末段），要改宿主才能根治。
 
+**发布 v1.5.2（2026-10-23，「常规视图」退出路径修复）**：`package.json` bump 到 `1.5.2`，`main`
+fast-forward，tag **`v1.5.2`** + GitHub Release。内容：**修 bug**（`55ccd45`）—— 「常规视图」按钮调的是
+保留键 `selectPanel('conversation')`，而右栏只在 `activePanelId === null` 时命名在屏会话，于是退出调音台后
+常规视图里的文件链接全部抛 `sidebarRight: no session surface is mounted`；改为 `selectPanel(null)`
+（与宿主会话行退出同路，见 §7.4），`interaction` 新增一条用例钉住参数、已先红后绿。`npm run check`
+= 97 用例 + 冷启动 `PASS`；验证过的 DSH runtime：`0.2.1-rc.2`（checkout `687f282`），真机复验
+退出后右栏立即恢复、点链接可打开。
+
 **发布 v1.5.1（2026-10-21，空板新建 bug 修复 + 文档 + README 改版）**：`package.json` bump 到 `1.5.1`，`main` fast-forward，tag **`v1.5.1`** + GitHub Release。内容三项：① **修 bug**（`5c0e57f`）—— 空板上点 `＋会话` 会把其它**可见**通道挤掉：`acceptNewChannel` 拿"持久化的板"（可能为空数组）当插入基准，改用 `visibleRef`（看得见的板），回归用例先红后绿验证过（`interaction` 的「空板上新建通道保留可见通道」）；② 文档两条（`2e82168` 格内审批卡 §6.25 端到端实测、`c3b81c9` 侧栏折叠观察记为非 bug）；③ **README 改版**（`98461ce` / `30bb861`）—— 卖点先行 + 一行安装命令 + 上手指南 + 真实宿主截图（`docs/assets/`，含 `PROVENANCE.md`；主图三格同框：空对话 / 等待审批 / 执行中）。`npm run check` = 96 用例 + 冷启动 `PASS`；验证过的 DSH runtime：`0.2.1-rc.2`（checkout `687f282`）。
 
 **发布 v1.5.0（2026-10-21，架构重构 + 光标落末尾）**：`package.json` bump 到 `1.5.0`，`main` fast-forward，tag **`v1.5.0`** + GitHub Release。内容：五个 module 深化（成员账本 / 宿主调用 runner / 插件作用域视图状态 / 通道 DOM adapter / 单一 host fixture，§9.0j）—— **纯重构、行为不变**；外加跳转后光标落在草稿末尾。`npm run check` = 95 用例 + 冷启动 `PASS`，用户浏览器复验归档撤销 / solo / 跳转三条路径与光标位置均通过。
