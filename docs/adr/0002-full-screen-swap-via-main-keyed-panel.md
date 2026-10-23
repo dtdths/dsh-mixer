@@ -6,3 +6,11 @@
 
 - 必须用**自己的** key，不能占用 `conversation`（那是内置会话面板的键，注册即替换它）。
 - 顶栏工具区的切换按钮只负责调用 `selectPanel`，不承担视图渲染。
+
+## 更正（2026-10-23）
+
+本节说「切回常规只需 `selectPanel('conversation')`，或点左侧会话行（那会 `selectPanel(null)`）」——
+这两条**并不等价**：`conversation` 是保留键，选它会让 `activePanelId` 非空，而宿主右栏
+（`ui-sidebar-right`）只在此值 **为 `null`** 时命名在屏会话。结果是退出调音台后常规视图里的文件链接
+全部抛 `sidebarRight: no session surface is mounted`。现行实现改为 `selectPanel(null)`，与会话行退出同路。
+细节见 spec §7.4。

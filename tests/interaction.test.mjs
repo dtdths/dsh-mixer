@@ -243,6 +243,20 @@ test('interaction: leaving by opening a Session WITH history is never undone by 
   assert.deepEqual(ui.host.selectPanelCalls, [])
 })
 
+test('interaction: 常规视图 leaves to the default Conversation, not a named panel (§5.1/§7.4)', async () => {
+  const ui = await mountTwo()
+  const { act, window } = ui
+  const button = [...ui.document.querySelectorAll('button')]
+    .find(node => (node.textContent || '').trim() === '常规视图')
+  assert.ok(button !== undefined, 'the top bar must offer the way back to the regular view')
+  act(() => { button.dispatchEvent(new window.MouseEvent('click', { bubbles: true })) })
+  /* `activePanelId === null` is what names the right Sidebar's on-screen Session (the
+     host's own row exit selects no panel). Selecting the reserved `conversation` key
+     instead left the Sidebar unnamed, so every file link in the regular view threw
+     `sidebarRight: no session surface is mounted` until a sidebar row was clicked. */
+  assert.deepEqual(ui.host.selectPanelCalls, [null])
+})
+
 test('interaction: a failed create says so instead of silently doing nothing (§5.2)', async () => {
   const ui = await mountTwo()
   ui.host.setCreateFailure({ code: 'session/writer-held', message: 'writer held' })

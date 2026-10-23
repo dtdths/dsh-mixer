@@ -2710,7 +2710,14 @@ window.__ModuleLoader__.load({
           store: boardStore,
           inject: () => ({
             refFor,
-            backToConversation: () => ctx.layout.selectPanel('conversation'),
+            /* Leave to the DEFAULT Conversation — `activePanelId === null` — not to
+               the reserved `conversation` panel KEY. The right Sidebar names its
+               on-screen Session only while no panel is selected (`ui-sidebar-right`
+               `index.ts:139`), so selecting the key instead left the Sidebar unnamed and
+               every file link in the regular view threw
+               `sidebarRight: no session surface is mounted` until a sidebar row was
+               clicked. `null` is what the host's own row exit uses (spec §7.4). */
+            backToConversation: () => ctx.layout.selectPanel(null),
             createSession,
             archiveSession,
             unarchiveSession,

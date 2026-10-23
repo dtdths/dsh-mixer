@@ -146,3 +146,22 @@ onDragStart={e => { e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setDat
 - 默认键位要在**全部五个 profile** 上合法；想只在部分平台绑定，就不声明那个 profile 的键（宿主的 `ui-workspace` 就这么做）。
 - **OS 级快捷键宿主规则看不到**：`Cmd+Option+←/→` 在 macOS 是系统媒体键（上一首/下一首），**系统在页面之前收走按键** —— 插件里的 `resolve` 根本不会被调用，用户看到的是"音乐换歌、通道不动"。这类只能靠避开：`dsh-mixer` 实测后把 `next`/`prev` 统一改成 `primary+alt+]` / `[`，并在 `host-contract` 里加了一条守卫（任何 `primary+alt+Arrow*` 默认值直接判红）。
 - `boot-check.mjs` / `tests/harness.mjs` 里的假 `register` 收什么都收，"11 条都注册了"证明不了宿主会接受。真判据要跑宿主自己的函数：见 `tests/host-contract.test.mjs` 的 `host registry accepts every shortcut default we register`（直接 `import` checkout 里的 `src/configuration.ts` / `src/binding.ts`，Node ≥ 22.18 原生剥离类型）。
+
+## 8. 右栏只在「没有面板」时才有在屏会话 —— 面板退出要 `selectPanel(null)`
+
+`ui-sidebar-right` 的 `require()` 在 `activePanelId !== null` 时必然抛
+`sidebarRight: no session surface is mounted`（`ui-sidebar-right/src/client/service.ts:730`）：它只在
+**没有面板**占主列时命名在屏会话（`index.ts:139`）。两个后果都在真机上踩过：
+
+- **面板里嵌会话**（我们的调音台、session-inspector）时，任何走 `ctx.sidebarRight.openResource` 的
+  交互（消息里的文件链接、工具行引用、`@` 引用）都会抛错，宿主把它渲染成「无法打开文件」对话框，
+  重试同样失败。插件没有拦截宿主链接点击的钩子 —— 这条要在宿主侧修。
+- **退出面板的落点写错，就把右栏留在「无在屏会话」状态**：`main` 槽里 `conversation` 是**保留键**，
+  `selectPanel('conversation')` 与 `selectPanel(null)` 看起来都回常规视图，但**只有 `null`** 让右栏
+  命名会话。v1.5.1 及以前的「常规视图」按钮调的是保留键 → 退出调音台后常规视图里的文件链接全部
+  抛 `sidebarRight: no session surface is mounted`，直到点一下左侧会话行或刷新。v1.5.2 改为
+  `selectPanel(null)`（与宿主自己的会话行退出同一条路径），`tests/interaction.test.mjs` 钉住参数。
+  ADR-0002 里「两条等价」的说法在 §7.4 更正。
+- 新增右栏相关服务边时：`sidebarRight` 既要在 `inject`（Cordis 服务名）里，也要在
+  `package.json` 的 `dsh.client.inject`（包名）里；`tests/host-face.mjs` 的 `HOST_SERVICES` 会替你把
+  两边对齐（`tests/host-contract.test.mjs` 有哨兵）。

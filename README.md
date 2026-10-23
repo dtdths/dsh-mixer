@@ -4,7 +4,7 @@
   <p><b>把多个 DSH 会话并排摆到一屏。谁在等你，一眼就看见。</b></p>
   <p>
     <img alt="release" src="https://img.shields.io/github/v/release/dtdths/dsh-mixer?color=3b82f6&label=release">
-    <img alt="checks" src="https://img.shields.io/badge/checks-96%20tests%20%2B%20cold%20boot-2ea043">
+    <img alt="checks" src="https://img.shields.io/badge/checks-97%20tests%20%2B%20cold%20boot-2ea043">
     <img alt="license" src="https://img.shields.io/badge/license-MIT-6b7280">
     <img alt="DSH" src="https://img.shields.io/badge/DSH-0.2.x-8b95a5">
   </p>
@@ -121,11 +121,12 @@ dsh plugin --profile web add /绝对路径/dsh-mixer-1.5.1.tgz
 - **归档撤销只留 6 秒** —— 与侧栏归档 toast 同一个窗口，不长不短。
 - **主题跟随宿主** —— 浅色/深色都用宿主 alias token，不另造一套颜色。
 - **纯客户端** —— Host half 保持为空，全部逻辑在视图层：不发网络请求、不写宿主的 `mainView`、不碰模型配置。
+- **调音台视图里点文件链接会报错（宿主限制）** —— 面板占住主列时宿主右栏没有「在屏会话」，点消息 / 工具行里的文件链接会弹「无法打开文件 `sidebarRight: no session surface is mounted`」，重试也没用。**退出调音台回到常规视图后就正常**（v1.5.2 修掉了退出的落点，见 [`docs/spec.md`](docs/spec.md) §7.4）；**视图内**这一下要等宿主修。
 
 ## 开发与自检
 
 ```bash
-npm run check                              # 语法 + 96 个用例 + 冷启动守卫
+npm run check                              # 语法 + 97 个用例 + 冷启动守卫
 DSH_REPO=/另一个/DSH/checkout npm run check  # 换宿主重验：契约漂移会指到具体断言
 ```
 
