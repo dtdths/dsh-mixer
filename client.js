@@ -119,6 +119,11 @@ window.__ModuleLoader__.load({
      * lose the file and move the caret.
      */
     const FILE_LINK_SELECTOR = '[class*="fileLink"],[class*="fileMention"],[data-ref-chip="file"]'
+      /* The deliverables card's preview button (ui-deliverables `PresentedFileCard`): a
+         plain React `onClick` that calls the host's open, exactly like a message link. Its
+         wrapper carries the stable `data-presented-file` hook, so this one does not depend
+         on the hashed module prefix alone. */
+      + ',[data-presented-file] [class*="cardPreview"]'
     /**
      * A reference chip in the composer (spec §7.4, "composer half"). It is a Lexical
      * decorator — `createDOM` writes this hook and the node's full reference lives in the

@@ -18,8 +18,10 @@
 1. 调音台根上挂 **capture 阶段**的 `click`。React 把 `onClick` 委托在 app 根容器上（`ui-renderer/src/client/index.ts:80`
    `createRoot`），所以在 capture 阶段 `stopPropagation()` 就能让宿主自己的处理器完全不跑。
 2. 只认**白名单**且必须满足两个前置：目标元素命中 `[class*="fileLink"]` / `[class*="fileMention"]` /
-   `[data-ref-chip="file"]`，且在某个 `[data-mixer-pane]` 之内（那个属性的值就是 sessionId，
-   `client.js:1623`）；并且元素上挂着 React 的 `onClick`（React 18 把 props 放在节点的 `__reactProps$…` 上）。
+   `[data-ref-chip="file"]` / 输入框的 `[data-composer-chip]` / 交付物卡片的
+   `[data-presented-file] [class*="cardPreview"]`，且在某个 `[data-mixer-pane]` 之内（那个属性的值就是
+   sessionId，`client.js:1623`）；并且元素上挂着 React 的 `onClick`（React 18 把 props 放在节点的
+   `__reactProps$…` 上）—— 输入框 chip 例外，它按第 6 条走。
 3. **任何一个前置不满足 → 什么都不做**，让宿主自己的处理器照常跑：用户看到的是宿主原本那个带「重试」的错误
    对话框。失效方向必须是「看得见的旧行为」，不是「点了没反应」。
 4. 前置齐了才吞掉点击：置「用户主动离开」闩 → `ctx.uiWorkspace.openSession(该格会话)` → **跨帧重试**重放

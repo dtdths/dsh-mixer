@@ -404,7 +404,11 @@ e.dataTransfer.setData('text/plain', node.id)   // node.id 就是 SessionId
 
 29. **调音台里的文件链接**（2026-10-28，§7.4 / ADR-0004）：在调音台某一格的**消息正文**里点一个文件链接 → 调音台退出、落到**那一格**的会话、文件直接开在右栏（不再弹 `无法打开文件 … no session surface is mounted`）；在**工具行**里点文件链接同效；点**已发送消息里的 `@` chip** 同效。反向确认：点通道内的**视图标签**（对话/轨迹）、头部、输入框都不会离开调音台；调音台里点审批卡 / 停止按钮 /
 URL 链接不受影响。
-30. **输入框里的 `@` 引用（2026-10-28，v1.6.1，§7.4）**：在某一格的**输入框**里打一个 `@文件名` 引用，再在调音台里
+30. **交付物卡片的预览（2026-10-28，v1.6.1，§7.4）**：让 agent 用 `present` 工具把一个文件声明为交付物 →
+    调音台里那张卡片上**缩略图位置**的预览按钮点一下 → 应离开调音台、落到该格会话、文件开在右栏（不再是
+    「无法打开文件 `sidebarRight: no session surface is mounted`」）。卡片右侧的「用 Xcode 打开 / 更多打开方式」
+    不在白名单里，行为不变。
+31. **输入框里的 `@` 引用（2026-10-28，v1.6.1，§7.4）**：在某一格的**输入框**里打一个 `@文件名` 引用，再在调音台里
 点它 → 应**离开调音台、落到该格会话，并打开那个文件**（不再是"点了没反应"）；**已发送消息里**的 `@` 引用同理。
 判据：右栏出现该文件的（新）标签 / 内容，且控制台没有 `sidebarRight: no session surface is mounted`。
 
@@ -458,8 +462,9 @@ v1.5.1 及以前，「常规视图」按钮调的是 `selectPanel('conversation'
 "点文件链接"整体挪到常规视图里完成：
 
 - **白名单**：消息里的三类宿主渲染（`[class*="fileLink"]` / `[class*="fileMention"]` /
-  `[data-ref-chip="file"]`）**+ 输入框里的 `[data-composer-chip]`**，且必须位于某个 `[data-mixer-pane]`
-  之内（属性值就是 sessionId）。
+  `[data-ref-chip="file"]`）**+ 输入框里的 `[data-composer-chip]` + 交付物卡片的预览按钮
+  （`[data-presented-file] [class*="cardPreview"]`，ui-deliverables 的 `PresentedFileCard`）**，
+  且必须位于某个 `[data-mixer-pane]` 之内（属性值就是 sessionId）。
 - **capture 阶段吞点击**：React 把 `onClick` 委托在 app 根容器上，所以在调音台根上 `stopPropagation()`
   就能让宿主自己的处理器完全不跑。
 - **路径不在 DOM 里，所以不拼路径，改重放宿主处理器**：React 18 把节点 props 挂在 `__reactProps$…` 上，

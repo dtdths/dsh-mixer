@@ -599,6 +599,10 @@ test('createChannelDom: the file-link hooks and the props read are spelled in on
   assert.match(asked, /fileLink/)
   assert.match(asked, /fileMention/)
   assert.match(asked, /data-ref-chip/)
+  /* The deliverables card's preview button is the fourth host rendering (2026-10-28:
+     clicking it in the mixer threw the same `no session surface is mounted`). */
+  assert.match(asked, /data-presented-file/)
+  assert.match(asked, /cardPreview/)
   assert.doesNotMatch(asked, /data-composer-chip/)
   assert.equal(dom.fileLinkOf(null), null)
   assert.equal(dom.fileLinkOf({}), null)
