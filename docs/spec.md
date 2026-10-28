@@ -16,7 +16,7 @@
 - 语音 / 多媒体通道。
 - **UI 文案接 locale 服务**（用户 2026-10-15 定：留作二期）。本期文案硬编码中文，见 §9。
 
-**交付形态**：只装 Client half，**不发布 npm**（`package.json` 是 `private: true`）。三条安装路径：仓库目录 `link:`（开发、热更新）/ git tag `github:dtdths/dsh-mixer#vN.N.N`（冻结版本）/ `.tgz`（离线）。**当前发布版 `v1.5.0`**（此前 `v1.4.0` / `v1.3.0` / `v1.2.0` / `v1.1.0` / `v1.0.0`）：`main` 与 `feat/mixer-v1` 同点，GitHub Release 里有安装命令与验证过的 DSH runtime 版本；步骤见 `README.md`「安装」「发布」。
+**交付形态**：只装 Client half，**不发布 npm**（`package.json` 是 `private: true`）。三条安装路径：仓库目录 `link:`（开发、热更新）/ git tag `github:dtdths/dsh-mixer#vN.N.N`（冻结版本）/ `.tgz`（离线）。**当前发布版 `v1.5.2`**（此前 `v1.5.1` / `v1.5.0` / `v1.4.0` / `v1.3.0` / `v1.2.0` / `v1.1.0` / `v1.0.0`）：`main` 与 `feat/mixer-v1` 同点，GitHub Release 里有安装命令与验证过的 DSH runtime 版本；步骤见 `README.md`「安装」「发布」。
 
 ## 2. 包结构
 
@@ -179,7 +179,16 @@ renderFactorySlot('conversation.content', input, { slots: { views: Views } })
 ### 5.1 进入与离开
 
 - 入口：会话头按钮（在「打开目录」左侧）+ `/mixer` 指令。两者都调用 `ctx.layout.selectPanel('mixer')`。
-- 离开：「常规视图」按钮或点左侧会话行。
+- 离开只有两条路：「常规视图」按钮，或点左侧会话行。`/mixer` 只进不出，`Esc` 也不用于退出（常规视图里 `Esc` 归宿主的"停止本轮"，§5.7 的注释同理）。
+- **「常规视图」落到「当前通道」**（2026-10-28，第十八轮）：有当前通道 → `ctx.uiWorkspace.openSession(该通道的会话 id)`；没有（或它已不在板上）→ 维持 `ctx.layout.selectPanel(null)`，落点仍是"进调音台之前在屏的会话"。
+  - `openSession` 就是**宿主侧栏会话行自己走的那条路**：`replaceMain(…, 'reveal')` 的尾部调 `selectPanel(null)`（`ui-workspace/src/client/navigation.ts:276-278` / `:528`），所以一次调用同时换主会话、退出面板、让右栏命名在屏会话（§7.4 的修复因此天然保留）。**不要**在它之后再补一次 `selectPanel(null)`：那是第二个出口，与第一个竞争。
+  - **当前通道 = 显式激活过的那个通道**，三种信号任一：① 在该通道内 `mousedown` / `keydown`（点头部、点窄条、点或敲输入框）② 跳转快捷键落在它（§5.6）③ 在它里面新建通道（§5.1 需求2）。
+  - **判据不能用 DOM 焦点**：宿主给每格 composer 都会自动聚焦、最后挂载者赢（见本节需求2 的 ③），"有焦点"只说明"最后渲染"，不说明你想待在哪。进入后什么都没做 → **无当前通道** → 退出保持原落点（"误入即退"不会偷偷换掉主会话）。
+  - 当前通道活在插件作用域（同通道集合：跨面板重挂存活、跨刷新不存活），**不通知**（退出时才读；一次 pointerdown 就让每格重渲染是纯噪声）。
+  - **离开闩**：两种用户离开手势（「常规视图」、§7.4 的文件链接）在 reveal **之前**置一个一次性闩；`shouldReclaimPanel` 收到 `userInitiatedExit` 就永不抢回面板，并顺手把 2s 窗口关掉。顺序要紧：`panelInfo` 是 sync-flush，它的订阅者会在 `selectPanel(null)` 调用**内部**同步跑完。宿主自己的新建入口不置闩 ⇒ 下面需求2 的行为一字未变（ADR-0003）。
+  - 为什么要这个闩：没有它，"退出时落在空白会话上"会被立即抢回调音台 —— 而新建出来的通道**都是**空白会话，所以最常见的"刚开一个新会话就去看别的通道"反而退不出去。
+  - 副作用（接受）：宿主窗口标题与左侧栏高亮跟随该会话；该会话的"已完成未读"绿点被宿主按 `mainView` 清掉（§4.3b）；进调音台前的会话不再是主会话，回去要点一次侧栏行。
+
 - 进入时把左侧栏折叠（见 §7.1），离开时恢复；**常规视图的状态不丢**（宿主保证）。
 - **新建会话不构成"离开"**（用户 2026-10-15 决定，需求2；理由与代价见 [ADR-0003](./adr/0003-new-session-does-not-leave-the-mixer.md)）：
   - 插件自己的新建入口不走宿主 `startSession`，而是 `ctx.sessions.create({ workspaceId })` + 自己 retain（§4.1）→ 不触发任何宿主导航，因此不需要抢面板。
@@ -382,8 +391,14 @@ e.dataTransfer.setData('text/plain', node.id)   // node.id 就是 SessionId
 23. **solo**（2026-10-20，§5.7）：点通道头部的 `solo`（或 `Cmd/Ctrl+Alt+S`）→ 该通道占满、其余压成 64px 窄条；窄条**与主通道一眼可分**（凹陷表面 + 1px 分界线 + 主色标题，浅色主题下也看得出来），状态点仍准确；点窄条切到那个通道；顶栏 `solo：… 退出` 或再按一次回到并排，**各通道宽度与 solo 前一致**；solo 期间拖不动分界线也拖不动头部排序；把被 solo 的通道归档 → solo 自动结束；刷新页面 → 回到并排（不持久化）。
 25. **格内审批卡（2026-10-21，无头浏览器实测通过）**：在调音台的某一格里让 agent 触发一次授权 → **该格**出现 `[data-approval-key]` 卡（`等待审批` + 理由 + 命令 + `拒绝` / `允许一次`），该格 `data-mixer-state="waiting"`、顶栏汇总 +1，**其它格不受影响**；点 `允许一次` → 卡片消失（实测 ~1.6s）、composer 回来、该格继续执行、顶栏计数归零。
 
-26. **常规视图的退出路径**（2026-10-23，§7.4）：进一次调音台，点「常规视图」回到会话后，点消息 / 工具行里的文件链接应正常打开右栏（不再弹 `无法打开文件 … no session surface is mounted`）；点左侧会话行退出同样正常。判据是**退出的落点**：`selectPanel` 必须收到 `null`（无面板），不能是保留键 `'conversation'`。**调音台视图内**点文件链接仍会报错（宿主限制，见 §7.4）。
+26. **常规视图的退出路径**（2026-10-23，§7.4）：进一次调音台，点「常规视图」回到会话后，点消息 / 工具行里的文件链接应正常打开右栏（不再弹 `无法打开文件 … no session surface is mounted`）；点左侧会话行退出同样正常。判据是**退出的落点**：`selectPanel` 必须收到 `null`（无面板），不能是保留键 `'conversation'`。（v1.6 起退出走 `uiWorkspace.openSession`，它内部尾部就是 `selectPanel(null)`；**调音台视图内**的文件链接改由 §7.4 / §6.29 接管，不再报错。）
 24. **通道间跳转快捷键**（2026-10-20，§5.6）：调音台打开时按 `Cmd/Ctrl+Alt+1..9` → 焦点落到第 N 个通道的输入框、**光标在草稿末尾**（继续写，而不是从头来；越界的通道给提示、不静默）；`Cmd/Ctrl+Alt+]` / `[` 从当前通道出发下/上一个并首尾环绕（**全平台同一套**；不要用 `Cmd+Option+←/→`，那是 macOS 的媒体键）；**调音台没打开时按键不被吞**；在 DSH 的快捷键设置里能看到并改这 12 条命令。
+
+27. **「常规视图」落到当前通道**（2026-10-28，§5.1）：进调音台后**点一下第 2 格的输入框**（或按 `Cmd/Ctrl+Alt+2`），点「常规视图」→ 常规视图显示的是**第 2 格的会话**（不是进调音台前那个，也不是第 1 格）；窗口标题与左侧栏高亮一致。**没碰过任何格就退出** → 落回进调音台前的会话（行为与 v1.5.2 相同）。点左侧会话行退出 → 落到**那一行**的会话（不受当前通道影响）。
+
+28. **空白会话也退得出去**（2026-10-28，§5.1 的离开闩）：新建一个**空白**通道（还没说话）并激活它，点「常规视图」→ 应停在常规视图里那个空白会话上（hero + 输入框），**不会被弹回调音台**；此时窗口标题/侧栏高亮指的是它。同时确认**宿主自己的新建入口没被误伤**：按 56px 轨道的新建按钮 / `Cmd/Ctrl+Alt+N` 仍然留在调音台（§6.13）。
+
+29. **调音台里的文件链接**（2026-10-28，§7.4 / ADR-0004）：在调音台某一格的**消息正文**里点一个文件链接 → 调音台退出、落到**那一格**的会话、文件直接开在右栏（不再弹 `无法打开文件 … no session surface is mounted`）；在**工具行**里点文件链接同效；点**已发送消息里的 `@` chip** 同效。反向确认：**输入框里正在编辑的 `@` chip** 点了仍是原来的行为（插件不接管）；调音台里点审批卡 / 停止按钮 / URL 链接不受影响。
 
 **验收记录（v1，2026-10-15，用户实测）**：在根包（`feat/mixer-v1` @ `5c8314b`，profile `web` 只装 `dsh-mixer`）上完成 —— 硬刷新冷启动**没有** `Failed to load plugins` / `web boot: N entry did not activate`；第 3–10 条逐条通过（含五档状态与左侧会话行逐档一致、持久化、归档联动、退出复原）。
 
@@ -427,12 +442,32 @@ v1.5.1 及以前，「常规视图」按钮调的是 `selectPanel('conversation'
 
 **修复（v1.5.2）**：`backToConversation` 改调 `ctx.layout.selectPanel(null)` —— 与宿主自己的会话行退出
 **同一条路径**。`tests/interaction.test.mjs` 新增一条用例钉住这一点：点「常规视图」后 `selectPanel` 的参数
-必须是 `null`，不能是保留键 `'conversation'`。
+必须是 `null`，不能是保留键 `'conversation'`。v1.6 起这一步升级成 `uiWorkspace.openSession(当前通道)`
+（§5.1）—— 它内部尾部就是 `selectPanel(null)`，所以这条修复被继承而不是被撤销。
 
-**仍然存在（宿主限制）**：**调音台视图内**点文件链接仍会抛同一个错 —— 面板占主列时右栏本就不路由
-（`require()` 在设计上就抛），插件也没有拦截宿主链接点击的钩子；根治要改宿主
-（`ui-chat.openFile` / `ui-reference` 的打开路径先揭示会话，或让右栏在面板关闭后重新命名）。
-复现脚本与证据见工作区 `repro-sidebarright/`（不入库）。
+**调音台视图内的文件链接（2026-10-28，第十八轮 → [ADR-0004](./adr/0004-file-links-leave-the-mixer-and-replay-the-host-handler.md)）**：
+宿主那半边仍然是设计后果（面板占主列 ⇒ 右栏不命名在屏会话 ⇒ `openResource` 必抛），**不改宿主**的前提下插件把
+"点文件链接"整体挪到常规视图里完成：
+
+- **白名单**：只认三类宿主渲染（`[class*="fileLink"]` / `[class*="fileMention"]` / `[data-ref-chip="file"]`），
+  且必须位于某个 `[data-mixer-pane]` 之内（属性值就是 sessionId）。composer 的 `@` chip 不在名单里
+  （只有 basename，且激活走 Lexical，吞掉会破坏光标）。
+- **capture 阶段吞点击**：React 把 `onClick` 委托在 app 根容器上，所以在调音台根上 `stopPropagation()`
+  就能让宿主自己的处理器完全不跑。
+- **路径不在 DOM 里，所以不拼路径，改重放宿主处理器**：React 18 把节点 props 挂在 `__reactProps$…` 上，
+  抓那个 `onClick`；`ui-chat` 的 `openFile` 闭包里有 `sessionId` + `cwd`，地址由
+  `fileAddressFor(sessionId, cwd, path)` 拼出（`ui-chat/src/client/apply.ts:258-263`）。
+  工具行链接渲染的是工具摘要、markdown 链接的 `title` 在图片预览时被丢掉、composer chip 只有 basename
+  —— 从 DOM 拼路径覆盖不了主场景。
+- **顺序**：读闭包 → 判定可接管 → `preventDefault` + `stopPropagation` → 置闩 →
+  `openSession(该格会话)` → **下一帧**重放闭包（右栏的"在屏会话"名是同步写好的，但它要开进去的那份
+  per-Session store 在渲染时才被 mint，所以同 tick 会抛、下一帧才成）。
+- **失效方向必须是安全的**：`sidebarRight` 用 `ctx.get` 可选读（不加 Cordis 边 —— 硬边会让没装右栏的
+  profile 整页启动失败）；拿不到服务、元素上没有可重放的 `onClick`、或 `openSession` 抛错 → **什么都不做**，
+  宿主自己的处理器照常跑，用户看到原来那个带「重试」的对话框（ADR-0004）。
+- **残余失败**：切换后重放仍抛错时调音台已卸载，插件没有渲染位置，只能 `console.error`；用户人在正确的会话上，
+  再点一次即成功。
+- 复现脚本与证据见工作区 `repro-sidebarright/`（不入库）。
 
 ## 8. 实现红线
 
@@ -473,6 +508,7 @@ v1.5.1 及以前，「常规视图」按钮调的是 `selectPanel('conversation'
 **排查手法**：原型的诊断行（`轮次导航 rail=/标记=/轮次=/宽=Npx（<560 才隐藏）/band=`）随脚手架一起删了，留在 `spike/mixer-two-pane` 分支上。判据仍然有效，可用 devtools 手测：**轮次≥2 且 宽≥560 且 rail=0 → 真异常**（先看覆盖规则是否命中）；**宽<560 → 预期隐藏**。
 
 ## 9. 未决 / 后续
+
 
 ### 9.0 2026-10-15 本轮拍板（用户回答「还有哪些未定」）
 
@@ -584,6 +620,25 @@ v1.5.1 及以前，「常规视图」按钮调的是 `selectPanel('conversation'
 
 **评审里明确没做的**：不拆 `client.js`（宿主只加载这一个文件）；不给 CSS 注入规则建 adapter（宿主类名/钩子改名仍需人工核对，Speculative）；不把 `host-contract` 的断言搬进 fixture（否则错的假设会同时通过两边）。
 
+### 9.0k 2026-10-28 第十八轮：退出跟随当前通道 + 调音台内文件链接（`/grill-with-docs` 设计树）
+
+用户提的两条需求先按 `grilling` 摊成设计树、逐轮收敛（每题一个推荐答案，六轮往返），再实现。术语同步 `CONTEXT.md`（新增「当前通道」「常规视图」）。
+
+| # | 决定 | 判据 / 理由 |
+| --- | --- | --- |
+| 1 | **「当前通道」= 显式激活过的通道**，不是 DOM 焦点 | 宿主给每格 composer 都自动聚焦、最后挂载者赢，焦点只说明"最后渲染"（§5.1 需求2③）。三种信号：格内 `mousedown`/`keydown`、跳转快捷键、在该格新建 |
+| 2 | **只有「常规视图」跟随**当前通道 | 点左侧会话行是用户**明确指定**了目标，跟随会把这个选择吃掉；§5.1 的 reclaim 判据极力避免的正是这类反向错误 |
+| 3 | 进入后**什么都没做** → 退出保持原落点 | "误入即退"不该偷偷改掉主会话。落点仍是 `selectPanel(null)` |
+| 4 | 用宿主自己的 `uiWorkspace.openSession` | 一次调用同时换 `mainView` + 退面板（`navigation.ts:276-278` / `:528`），与侧栏会话行同路；§7.4 的 v1.5.2 修复被继承而不是被撤销 |
+| 5 | **加"用户主动离开"闩**，顺手修掉"空白会话退不出去" | 没有它，退出落在空白会话上会被 2s 内的 reclaim 抢回；而新建出来的通道都是空白会话，最常见的"刚开一个新会话就去看别的通道"反而退不出去。宿主新建入口不置闩 ⇒ ADR-0003 行为一字未变 |
+| 6 | 文件链接**整体挪到常规视图**完成：capture 吞点击 → `openSession(该格)` → 下一帧重放宿主处理器 | 路径在宿主闭包里、从不进 DOM（工具行无 `title`、图片链接丢 `title`、composer chip 只有 basename），只能重放（ADR-0004） |
+| 7 | 落点是**点击所在的那一格**，不是当前通道 | 链接的归属是"它出现在哪个会话里"；用焦点判断在这里会骗人 |
+| 8 | 失效方向 = **放行原点击**，不是"切过去但没打开" | 退出后插件没有渲染位置（宿主的 `notify` 只是 ui-workspace 内部的 `rowToast`，未对插件暴露），"静默失败"正是本仓反复交学费的那一类 |
+| 9 | `sidebarRight` 用 `ctx.get` 可选读，**不加 Cordis 边** | 硬边会让没装右栏的 profile 整页启动失败（`web/src/boot-client.ts:80-82`） |
+| 10 | **开 ADR-0004**；ADR-0003 的边界改写为"只有用户自己的离开手势是终局的" | 难逆 + 无上下文会奇怪（"为什么在 `__reactProps$` 里掏东西"）+ 真权衡（读 React 内部 vs 两次点击） |
+
+**明确没做的**：不接管 composer 的 `@` chip（只有 basename，且激活走 Lexical 的 `CLICK_COMMAND`，吞掉会破坏光标落点）；不走 OS 打开通道（`ctx.remote.session.openWorkspacePath` 是弹到系统默认 App，语义不同且要多挂两条服务边）；不改宿主。
+
 ### 9.1 仍开放
 
 - **钉住视图不写会话记忆**（§4.4 边界）：要"点了就记住"，需上游暴露 store 或 `selectView` 动作。
@@ -615,9 +670,9 @@ v1.5.1 及以前，「常规视图」按钮调的是 `selectPanel('conversation'
 | --- | --- |
 | `client.js` | 单文件 Client half（模块加载器只认这一个文件，所以缝只能是文件内的纯函数） |
 | `boot-check.mjs` | 冷启动守卫：真实 Cordis Context + 对照项，并断言 `main` 的 session 子槽与 board store |
-| `tests/seams.test.mjs` | `node --test` 覆盖 19 个纯函数缝 / module + 1 张文案表（24 个用例）；`client.js` 的返回值多挂一个 `__test` 字段把这些缝暴露给测试（宿主只读 `inject` / `apply`，其余键被忽略） |
+| `tests/seams.test.mjs` | `node --test` 覆盖 20 个纯函数缝 / module + 1 张文案表（28 个用例）；`client.js` 的返回值多挂一个 `__test` 字段把这些缝暴露给测试（宿主只读 `inject` / `apply`，其余键被忽略） |
 | `tests/render.test.mjs` | 用**宿主的真 React + react-dom/server** 把面板渲染成静态 HTML（10 个用例）：状态标记、面包屑、每格工厂内容、分栏把手、宽度落到 flex、空态、状态回落、**空会话必须拿到 hero 相位**、缺 store 的降级路径。纯函数测试看不见 React 层，靠这一层补 |
-| `tests/interaction.test.mjs` | 把面板挂进 **jsdom + react-dom/client**，用真事件驱动（37 个用例）：× 关闭后停靠并可从顶栏放回（且 retain 未释放）、`会话` 浮层勾选写 board 与本地标题过滤、**左列行点击只把右列滚到该工作区、不导航，且行 hover 的「＋会话」在该工作区建会话并落第 0 位**、**新建走 `ctx.sessions.create` 并置顶 + 光标落在新格**、**刚新建完的主动离开不被抢回**、**复用同工作区空白会话**、**宿主入口的窄条件抢回（主动离开不抢）**、`Esc`/再点触发器/点浮层外三种关闭、**顶栏不出现工作区名而面板里出现**、**新建失败在顶栏可见**、**光标交接等迟到的 composer**、**触发器要有按钮样式**、**点左列工作区滚动右列**、**归档会话不在列表里**、**悬停出行尾归档且归档后该格关掉**、**正在执行先问一次再停止并归档**、**归档抛错/缺 API 都要出提示**、**归档进行中显示"归档中…"**、**归档后 6s 可撤销：通道回到原位置 + 原宽度、只保留最新一条、拒绝/缺方法都出提示**、**通道间跳转快捷键：注册 12 条、跳到第 N 个通道并聚焦、未打开时不吞键、越界与无通道给提示、next/prev 首尾环绕**、**solo：进入后其余通道变窄条、点窄条切换、退出后宽度权重不变、被 solo 的通道消失则自动退出、快捷键按光标所在通道 solo（无光标时给提示）**、视图标签经工厂 seam 钉住 view、焦点标记、拖分界线（比例 + 380 夹紧 + 收尾）、头部拖动载荷（含**同尺寸替身虚影**：真实头部克隆、身体按 `bodyFitsCell` 克隆或骨架、离屏、下一个 task 移除，与 `.4` 占位）与「从 × 起拖被拒」、**空会话虚影保留 hero 与 composer**、**越界通道的虚影身体是骨架**、轨道 drop 重排并拒收非会话负载、**拖动时同宽空槽（让位）** |
+| `tests/interaction.test.mjs` | 把面板挂进 **jsdom + react-dom/client**，用真事件驱动（43 个用例）：× 关闭后停靠并可从顶栏放回（且 retain 未释放）、`会话` 浮层勾选写 board 与本地标题过滤、**左列行点击只把右列滚到该工作区、不导航，且行 hover 的「＋会话」在该工作区建会话并落第 0 位**、**新建走 `ctx.sessions.create` 并置顶 + 光标落在新格**、**刚新建完的主动离开不被抢回**、**复用同工作区空白会话**、**宿主入口的窄条件抢回（主动离开不抢）**、`Esc`/再点触发器/点浮层外三种关闭、**顶栏不出现工作区名而面板里出现**、**新建失败在顶栏可见**、**光标交接等迟到的 composer**、**触发器要有按钮样式**、**点左列工作区滚动右列**、**归档会话不在列表里**、**悬停出行尾归档且归档后该格关掉**、**正在执行先问一次再停止并归档**、**归档抛错/缺 API 都要出提示**、**归档进行中显示"归档中…"**、**归档后 6s 可撤销：通道回到原位置 + 原宽度、只保留最新一条、拒绝/缺方法都出提示**、**通道间跳转快捷键：注册 12 条、跳到第 N 个通道并聚焦、未打开时不吞键、越界与无通道给提示、next/prev 首尾环绕**、**solo：进入后其余通道变窄条、点窄条切换、退出后宽度权重不变、被 solo 的通道消失则自动退出、快捷键按光标所在通道 solo（无光标时给提示）**、视图标签经工厂 seam 钉住 view、焦点标记、拖分界线（比例 + 380 夹紧 + 收尾）、头部拖动载荷（含**同尺寸替身虚影**：真实头部克隆、身体按 `bodyFitsCell` 克隆或骨架、离屏、下一个 task 移除，与 `.4` 占位）与「从 × 起拖被拒」、**空会话虚影保留 hero 与 composer**、**越界通道的虚影身体是骨架**、轨道 drop 重排并拒收非会话负载、**拖动时同宽空槽（让位）** |
 | `tests/store.test.mjs` | 用**宿主的真 store 引擎**跑持久化（5 个用例）：键名与 root 无后缀、坏数据逐字段兜底、第二个实例恢复、无 localStorage 时的可用性 |
 | `tests/sidebar.test.mjs` / `tests/labels.test.mjs` | 折叠幂等（5 个）与措辞对齐宿主字典（5 个） |
 | `tests/host-contract.test.mjs` | **宿主契约漂移哨兵**（11 个）：`external` 的名字仍在该 checkout 的平台静态表与 seed 表里、`inject` 每条边都指向真实存在的包、slot 注册仍提供 `store` 与 session 子槽座位、root store 仍以无 key 方式实例化、侧栏行状态的四个事实与三种 kind 仍在、轮次导航仍由容器查询隐藏、归档撤销仍走 `unarchiveSession` 且 toast hold 仍是 6000ms、快捷键注册表 `Shortcuts.register` 的形状与区域仍未变、**每条默认键位都过宿主自己的 `bindingIssue` / 冲突判据（五个 profile 全部）**、**注入名单与 `tests/host-face.mjs` 的 `HOST_SERVICES` 完全一致且 fake 真的提供每个服务**。其中前两条与最后一条是真检查（能真失败），其余是锚点检查（命中 = 机制还在，不等于行为不变） |
@@ -656,16 +711,17 @@ DSH_REPO=/新的/checkout 路径 npm run check
 | `createBoardStore()` | `defineStore({persist:'dsh.mixer.v1'})`；store 不可用时退化到内存实现 |
 | `heroFor(summary)` | 空会话相位（§4.4，需求1）：返回 `{ phase, hero }`，判据照抄宿主 |
 | `blankTargetFor(list, workspace, archivedIds)` | 复用同工作区空白会话的挑选（§4.1，需求2） |
-| `shouldReclaimPanel({ leftMixer, activePanelId, revealed })` | 窄条件抢回面板（§5.1 / ADR-0003，需求2）：`revealed = { id, blank }` 来自宿主 `mainView` |
+| `shouldReclaimPanel({ leftMixer, activePanelId, revealed, userInitiatedExit })` | 窄条件抢回面板（§5.1 / ADR-0003，需求2）：`revealed = { id, blank }` 来自宿主 `mainView`；`userInitiatedExit` 为真时**永不抢回**（第十八轮：用户自己的离开手势是终局的，空白会话也不例外） |
+| `exitTargetOf({ activeChannelId, channels })` | 「常规视图」的落点（§5.1，第十八轮）：当前通道在板上 → 它的会话 id；没激活过 / 已不在板上 / 输入不合法 → `undefined`（= 保持原落点 `selectPanel(null)`） |
 | `archiveActivityOf(reason)` | 宿主"正在执行"拒绝的识别（§5.2，第四轮）：按错误名 `WorkspaceArchiveError` + `workspace/session-active`，与 ui-workspace 同判据 |
 | `createChannelLedger()` | **板成员账本**（§4.1 / §9.0j）：`note/forget/reasonOf/graduate/survivors/staleWeights`。「什么算 gone」的唯一定义；豁免记原因（`born` / `returned`）而不是布尔，因为两者毕业时机不同 |
 | `createHostCalls({notify, pending})` | **宿主调用结局 runner**（§5.2 / §9.0j）：缺方法 / 同步抛 / 拒绝 / 可确认的拒绝 / 成功，五种结局各一次；返回 `run(spec)`，调用点只声明自己特有的事实 |
-| `createViewState()` | **插件作用域视图状态**（§5.6 / §5.7 / §9.0j）：`subscribe/snapshot/setSolo/park/unpark/clearParked/parkedIds/handOff/take/publish/channels/commands`。solo + 移出 + 重挂交接的唯一所有者，自己发通知 |
-| `createChannelDom(doc?)` | **通道 DOM adapter**（§9.0j）：`channelOf/caretChannel/paneOf/headOf/tabsOf/bodyOf/scrollerOf/fieldOf/reveal/focus`。`data-mixer-*` 与宿主钩子只在这里拼写；`focus` 返回 false 表示 composer 还没上屏（面板据此帧重试） |
+| `createViewState()` | **插件作用域视图状态**（§5.6 / §5.7 / §9.0j）：`subscribe/snapshot/setSolo/park/unpark/clearParked/parkedIds/handOff/take/publish/channels/commands/setActive/activeChannel`。solo + 移出 + 重挂交接 + **当前通道**的唯一所有者；前三个自己发通知，`publish`/`setActive` 刻意不发 |
+| `createChannelDom(doc?)` | **通道 DOM adapter**（§9.0j）：`channelOf/caretChannel/fileLinkOf/hostClickOf/paneOf/headOf/tabsOf/bodyOf/scrollerOf/fieldOf/reveal/focus`。`data-mixer-*` 与宿主钩子只在这里拼写；`focus` 返回 false 表示 composer 还没上屏（面板据此帧重试） |
 
 另有四条行为常量，**只在文档与代码注释里约定、不进 `__test`**（它们不是判断，是时序参数，钉一个数字等于写同义反复）：`FOCUS_RETRY_FRAMES = 30`（光标交接等宿主 composer 出现的帧数上限，§5.1③）、`RECLAIM_WINDOW_MS = 2000`（抢回判据的时效窗，§5.1）、`HERO_LIFT_PX = 48`（空会话 hero 的光学上调，§4.4）与 `ARCHIVE_UNDO_MS = 6000`（归档撤销的时效窗，镜像宿主 toast 的 hold，§5.2）。
 
-后 4 条是 2026-10-15 第二轮新增（需求 1 / 2 / 4）。**用例数已落地**：v1 的 53 例 + 第二轮 15 例 = **68 例**全绿（`seams` +4、`render` +1、`interaction` +10）；第三轮再 +1（`interaction` 的「触发器要有按钮样」）；第四轮 +4（`seams` 的 `archiveActivityOf` + `interaction` 的归档过滤 / 悬停归档 / 停止并归档）；第五轮 +2（归档同步抛错 / 未提供 `archiveSession` 都要出提示，以及 `归档中…` 的进行中态）；第六轮 +1（`host-contract` 的 inject 名单哨兵）；第七轮 +1（`interaction` 的「替身虚影同尺寸/带真实头部/下一个 task 撤销」）；第八轮 +2（`interaction` 的「空会话虚影保留 hero 与 composer」「越界通道的虚影身体是骨架」）；第十一轮 **−1**（`landingWorkspace` 缝随「新建落点」退休一并删除，`interaction` 的左列用例原地改写为「跳转 + 行内新建」）；第十二轮 +4（`interaction` 的归档撤销三例：回原位/回宽度、失败与缺方法、只保留最新一条；`host-contract` 的归档撤销锚点）；第十三轮 +4（`interaction` 的通道跳转三例：跳第 N 个并聚焦、不吞键与越界提示、next/prev 首尾环绕；`host-contract` 的快捷键注册表锚点）；同轮修 +1（`host-contract` 的「默认键位过宿主校验」）；第十四轮 +3（`interaction` 的 solo 三例）;**第十五轮（架构评审落地）** +5（`seams` 新增 ledger / runner / view state / DOM adapter 四例 —— 每例把一个 module 的规则一次钉住；`host-contract` 新增 host-face 名单一致性哨兵）；第十六轮 +1（`interaction` 的「空板上新建通道保留可见通道」）；**第十七轮** +1（`interaction` 的「常规视图退到无面板」）= **97 例**。`tests/harness.mjs` 的假宿主已补齐 `ctx.sessions.create` 的记录、`sessions.list` / `layout.panelInfo` 两个可订阅源（含 `setList` / `setPanelInfo` 驱动），并且 `useStore` 改成真的订阅 + 版本号重渲染——原来只读快照，导致"面板自己的写入"在测试里根本不会触发重渲染，`×` 关闭那条用例是靠别的原因才过的。
+后 4 条是 2026-10-15 第二轮新增（需求 1 / 2 / 4）。**用例数已落地**：v1 的 53 例 + 第二轮 15 例 = **68 例**全绿（`seams` +4、`render` +1、`interaction` +10）；第三轮再 +1（`interaction` 的「触发器要有按钮样」）；第四轮 +4（`seams` 的 `archiveActivityOf` + `interaction` 的归档过滤 / 悬停归档 / 停止并归档）；第五轮 +2（归档同步抛错 / 未提供 `archiveSession` 都要出提示，以及 `归档中…` 的进行中态）；第六轮 +1（`host-contract` 的 inject 名单哨兵）；第七轮 +1（`interaction` 的「替身虚影同尺寸/带真实头部/下一个 task 撤销」）；第八轮 +2（`interaction` 的「空会话虚影保留 hero 与 composer」「越界通道的虚影身体是骨架」）；第十一轮 **−1**（`landingWorkspace` 缝随「新建落点」退休一并删除，`interaction` 的左列用例原地改写为「跳转 + 行内新建」）；第十二轮 +4（`interaction` 的归档撤销三例：回原位/回宽度、失败与缺方法、只保留最新一条；`host-contract` 的归档撤销锚点）；第十三轮 +4（`interaction` 的通道跳转三例：跳第 N 个并聚焦、不吞键与越界提示、next/prev 首尾环绕；`host-contract` 的快捷键注册表锚点）；同轮修 +1（`host-contract` 的「默认键位过宿主校验」）；第十四轮 +3（`interaction` 的 solo 三例）;**第十五轮（架构评审落地）** +5（`seams` 新增 ledger / runner / view state / DOM adapter 四例 —— 每例把一个 module 的规则一次钉住；`host-contract` 新增 host-face 名单一致性哨兵）；第十六轮 +1（`interaction` 的「空板上新建通道保留可见通道」）；**第十七轮** +1（`interaction` 的「常规视图退到无面板」）；**第十八轮** +10（`seams` 四例：离开闩、`exitTargetOf`、`createViewState` 的当前通道、`createChannelDom` 的文件链接钩子；`interaction` 六例：常规视图落到当前通道、键盘跳转也算激活、空白会话退出不被抢回、文件链接切走后由宿主打开、拿不到闭包时放行、没有右栏时不接管）= **107 例**。`tests/harness.mjs` 的假宿主已补齐 `ctx.sessions.create` 的记录、`sessions.list` / `layout.panelInfo` 两个可订阅源（含 `setList` / `setPanelInfo` 驱动），并且 `useStore` 改成真的订阅 + 版本号重渲染——原来只读快照，导致"面板自己的写入"在测试里根本不会触发重渲染，`×` 关闭那条用例是靠别的原因才过的。
 
 **验证**：`npm run check`（语法 + **53 个用例** + 冷启动）在本机全绿；**浏览器行为已由用户按 §6 十条在根包上验收通过**（2026-10-15，装根包 + 卸 `dsh-mixer-spike` + 硬刷新；见 §6 验收记录）。
 **第二轮（需求 1–4）实现后的验证**：`npm run check` = **76 个用例全绿** + 冷启动 `PASS`（2026-10-15）；**§6 第 12–20 条属观感项，由用户在浏览器里逐条验收** —— 尤其"整格虚影"与"让位"两处只有真拖拽能验。
@@ -688,6 +744,12 @@ fast-forward，tag **`v1.5.2`** + GitHub Release。内容：**修 bug**（`55ccd
 （与宿主会话行退出同路，见 §7.4），`interaction` 新增一条用例钉住参数、已先红后绿。`npm run check`
 = 97 用例 + 冷启动 `PASS`；验证过的 DSH runtime：`0.2.1-rc.2`（checkout `687f282`），真机复验
 退出后右栏立即恢复、点链接可打开。
+
+**第十八轮（2026-10-28，退出跟随当前通道 + 调音台内文件链接，§9.0k / ADR-0004）**：`npm run check` = **107 个用例 + 冷启动 `PASS`**。
+- 「常规视图」改走 `ctx.uiWorkspace.openSession(当前通道的会话)`（§5.1）；**当前通道 = 显式激活过的通道**，进入后没动过任何格就保持原落点（"误入即退"不改主会话）。
+- 新增一次性「用户主动离开」闩，顺手修掉**"主会话是空白时退不出调音台"**这个既有 bug（`shouldReclaimPanel` 现在收 `userInitiatedExit`；宿主新建入口那条 reclaim 一字未变，ADR-0003 边界据此收窄）。
+- 调音台内的文件链接改为：capture 吞点击 → `openSession(该格会话)` → 下一帧重放宿主的 `onClick`（path + cwd 只在那个闭包里）。失效方向 = **放行原点击**；`sidebarRight` 用 `ctx.get` 可选读、不加服务边（ADR-0004）。
+- 未做：composer `@` chip 接管、OS 打开通道。**待用户实机验收 §6.27 / §6.28 / §6.29**。
 
 **发布 v1.5.1（2026-10-21，空板新建 bug 修复 + 文档 + README 改版）**：`package.json` bump 到 `1.5.1`，`main` fast-forward，tag **`v1.5.1`** + GitHub Release。内容三项：① **修 bug**（`5c0e57f`）—— 空板上点 `＋会话` 会把其它**可见**通道挤掉：`acceptNewChannel` 拿"持久化的板"（可能为空数组）当插入基准，改用 `visibleRef`（看得见的板），回归用例先红后绿验证过（`interaction` 的「空板上新建通道保留可见通道」）；② 文档两条（`2e82168` 格内审批卡 §6.25 端到端实测、`c3b81c9` 侧栏折叠观察记为非 bug）；③ **README 改版**（`98461ce` / `30bb861`）—— 卖点先行 + 一行安装命令 + 上手指南 + 真实宿主截图（`docs/assets/`，含 `PROVENANCE.md`；主图三格同框：空对话 / 等待审批 / 执行中）。`npm run check` = 96 用例 + 冷启动 `PASS`；验证过的 DSH runtime：`0.2.1-rc.2`（checkout `687f282`）。
 

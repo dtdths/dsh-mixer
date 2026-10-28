@@ -155,7 +155,7 @@ onDragStart={e => { e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setDat
 
 - **面板里嵌会话**（我们的调音台、session-inspector）时，任何走 `ctx.sidebarRight.openResource` 的
   交互（消息里的文件链接、工具行引用、`@` 引用）都会抛错，宿主把它渲染成「无法打开文件」对话框，
-  重试同样失败。插件没有拦截宿主链接点击的钩子 —— 这条要在宿主侧修。
+  重试同样失败。v1.6 起调音台**自己接管**这一类点击（本节第 9 条 + ADR-0004），但那是绕行，不是根治：要根治仍得改宿主。
 - **退出面板的落点写错，就把右栏留在「无在屏会话」状态**：`main` 槽里 `conversation` 是**保留键**，
   `selectPanel('conversation')` 与 `selectPanel(null)` 看起来都回常规视图，但**只有 `null`** 让右栏
   命名会话。v1.5.1 及以前的「常规视图」按钮调的是保留键 → 退出调音台后常规视图里的文件链接全部
@@ -165,3 +165,28 @@ onDragStart={e => { e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setDat
 - 新增右栏相关服务边时：`sidebarRight` 既要在 `inject`（Cordis 服务名）里，也要在
   `package.json` 的 `dsh.client.inject`（包名）里；`tests/host-face.mjs` 的 `HOST_SERVICES` 会替你把
   两边对齐（`tests/host-contract.test.mjs` 有哨兵）。
+
+## 9. 读 React 内部能拿到宿主处理器 —— 但失效时必须放行
+
+调音台里的文件链接（§7.4 / ADR-0004）只有一条可行的修法：**重放宿主自己那个 `onClick`**。原因是
+路径根本不在 DOM 里 —— 工具行链接渲染的是工具摘要（`ToolRow.tsx:211-224` 无 `title`）、markdown 链接的
+`title` 在图片预览时被丢掉（`render.tsx:592`）、composer 的 `@` chip 只有 basename；地址是在
+`ui-chat/apply.ts:258-263` 的闭包里用 `sessionId` + `cwd` 拼出来的。
+
+拿那个闭包只能靠内部字段：React 18.2 把节点 props 挂在 DOM 节点自己的 `__reactProps$<random>` 上
+（`Object.keys(el).find(k => k.startsWith('__reactProps$'))` → `props.onClick`）。三条纪律：
+
+1. **宿主自己从不读 React 内部**（这个 checkout 全仓 0 处），所以这是本仓第一个这样的口子，升级 React
+   会静默失效 —— `createChannelDom().hostClickOf()` 是它唯一的拼写处，`tests/seams.test.mjs` 有一条
+   「拿不到内部键就返回 `undefined`」的用例。
+2. **失效方向必须是「放行原点击」**：拿不到闭包就什么都不做，让宿主自己的处理器照常跑（用户看到原来那个
+   带「重试」的对话框）。绝不能变成"吞掉点击然后什么也没发生"—— 那正是本仓反复交学费的那一类症状。
+3. **必须配一个"重放前先离开面板"的时序**：`openResource` 要求右栏已命名在屏会话，而那个名字是在
+   `selectPanel(null)` 里**同步**写好的（`store` 是 sync-flush），但它要开进去的 per-Session store 在
+   **渲染时**才 mint —— 所以同 tick 调用会抛，**下一帧**（`requestAnimationFrame`）才成。
+
+另外：capture 阶段 `stopPropagation()` **确实能**挡住宿主的处理器，因为 React 把 `onClick` 委托在 app
+根容器上（`ui-renderer/src/client/index.ts:80`），bubble 阶段根本没机会跑；而 `preventDefault` 对这些
+`<button>`（不是 `<a href>`）没有意义。composer 的 `@` chip 不能接管：它只有 basename，且激活走 Lexical
+的 `CLICK_COMMAND`，吞掉点击会破坏光标落点。
+
