@@ -26,6 +26,7 @@ const {
   heroFor,
   blankTargetFor,
   shouldReclaimPanel,
+  exitTargetOf,
   archiveActivityOf,
   resizedWeights,
   crumbsFor,
@@ -499,3 +500,59 @@ test('shouldReclaimPanel: only a revealed blank Session, never a plain exit', ()
   assert.equal(shouldReclaimPanel({ ...fire, revealed: { id: '', blank: true } }), false)
   assert.equal(shouldReclaimPanel({ ...fire, revealed: { id: 'n1' } }), false)
 })
+
+test('shouldReclaimPanel: a deliberate exit is never undone, not even onto a blank Session', () => {
+  const fire = { leftMixer: true, activePanelId: null }
+  /* The host's own new-session entrance reveals a blank Session with no user gesture:
+     that is the case the reclaim exists for (spec §5.1, requirement 2). */
+  assert.equal(shouldReclaimPanel({ ...fire, revealed: { id: 'fresh', blank: true } }), true)
+  /* The user pressed 常规视图 (or clicked a file link) and landed on a blank Session —
+     the mixer must stay gone. Before v1.6 this bounced the user back into the mixer and
+     made the mixer impossible to leave while the main Session was blank (spec §5.1). */
+  assert.equal(
+    shouldReclaimPanel({ ...fire, revealed: { id: 'fresh', blank: true }, userInitiatedExit: true }),
+    false,
+  )
+  /* The latch is not a blanket permission: a non-gesture exit still reclaims. */
+  assert.equal(
+    shouldReclaimPanel({ ...fire, revealed: { id: 'fresh', blank: true }, userInitiatedExit: false }),
+    true,
+  )
+  /* …and it never resurrects a reclaim that had no reason to fire. */
+  assert.equal(
+    shouldReclaimPanel({ ...fire, revealed: { id: 's1', blank: false }, userInitiatedExit: true }),
+    false,
+  )
+})
+
+test('exitTargetOf: 常规视图 lands on the channel the user is working in (§5.1)', () => {
+  /* Nothing activated since the mixer opened: keep the pre-v1.6 landing (the host's own
+     mainView, i.e. `selectPanel(null)`), because "the last one rendered" is not a choice
+     — the host auto-focuses every pane's composer on mount (spec §5.1). */
+  assert.equal(exitTargetOf({ activeChannelId: undefined, channels: ['s1', 's2'] }), undefined)
+  /* One explicit activation: that channel's Session takes over the regular view. */
+  assert.equal(exitTargetOf({ activeChannelId: 's2', channels: ['s1', 's2'] }), 's2')
+  /* The active channel left the board (archived, closed away, auto-pruned): revealing a
+     Session that is no longer a channel would be a guess — fall back to the plain exit. */
+  assert.equal(exitTargetOf({ activeChannelId: 's9', channels: ['s1', 's2'] }), undefined)
+  /* Garbage input must not throw and must not invent a target. */
+  assert.equal(exitTargetOf({}), undefined)
+  assert.equal(exitTargetOf({ activeChannelId: 's1' }), undefined)
+  assert.equal(exitTargetOf({ activeChannelId: '', channels: [''] }), undefined)
+  assert.equal(exitTargetOf({ activeChannelId: 's1', channels: undefined }), undefined)
+})
+
+test('createViewState: the active channel is an explicit signal and never re-renders', () => {
+  const view = createViewState()
+  assert.equal(view.activeChannel(), undefined, 'nothing is active before the user acts')
+  let renders = 0
+  view.subscribe(() => { renders += 1 })
+  view.setActive('s2')
+  assert.equal(view.activeChannel(), 's2')
+  /* Activation is read when the user leaves; notifying here would make a pointerdown
+     re-render every channel (the same discipline as `publish`). */
+  assert.equal(renders, 0)
+  view.setActive(undefined)
+  assert.equal(view.activeChannel(), undefined)
+})
+

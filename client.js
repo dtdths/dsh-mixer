@@ -395,6 +395,7 @@ window.__ModuleLoader__.load({
       const parked = new Set()
       let solo
       let firstInLine
+      let activeChannelId
       let channels = []
       let commands = { focus: () => {}, step: () => {} }
 
@@ -449,6 +450,18 @@ window.__ModuleLoader__.load({
         },
         channels() { return channels },
         commands() { return commands },
+        /* The channel the user is actually working in (spec §5.1): 常规视图 exits onto
+           it, and a file link leaves onto the channel it was clicked in. Written by the
+           three EXPLICIT signals only — a pointer/key down inside the channel, a jump
+           command, or creating a channel — never by the host composer's auto-focus,
+           which fires for every pane on mount and would make "rendered last" look like an
+           intention. Like `publish`, this must never notify: it is read at exit time, and
+           a pointerdown that re-rendered every channel would be pure noise. */
+        setActive(sessionId) {
+          if (sessionId === activeChannelId) return
+          activeChannelId = sessionId
+        },
+        activeChannel() { return activeChannelId },
       }
     }
 
@@ -653,14 +666,40 @@ window.__ModuleLoader__.load({
      * @param input.leftMixer - the mixer was the active panel and went blank just now.
      * @param input.activePanelId - where the host says the centre panel is now.
      * @param input.revealed - `{ id, blank }` for the Session `mainView` now points at.
+     * @param input.userInitiatedExit - the user asked to leave (常规视图, a file link):
+     *   the panel must never come back, not even onto a blank Session.
      * @returns whether to call `selectPanel('mixer')` again.
      */
     function shouldReclaimPanel(input) {
       const revealed = input.revealed
       if (input.leftMixer !== true || input.activePanelId !== null) return false
+      /* The user's own exit is the one case that must be final. Before v1.6 a blank
+         Session made the panel bounce straight back, so the mixer could not be left at
+         all while the main Session had no history (spec §5.1). */
+      if (input.userInitiatedExit === true) return false
       if (revealed === undefined || revealed === null) return false
       if (revealed.blank !== true) return false
       return typeof revealed.id === 'string' && revealed.id !== ''
+    }
+
+    /**
+     * The Session the regular view must land on when the user leaves with 常规视图
+     * (spec §5.1): the **current channel** — the one the user explicitly activated — or
+     * `undefined`, which means "keep the pre-v1.6 landing" (`selectPanel(null)`).
+     *
+     * Why an explicit signal and not focus: the host's InputBar auto-focuses EVERY pane's
+     * composer on mount and the last mount wins, so "focused" would only mean "rendered
+     * last" the moment the panel opens.
+     * @param input.activeChannelId - the last channel the user worked in, if any.
+     * @param input.channels - the channels currently on the board.
+     * @returns the SessionId to reveal, or undefined to leave the host's choice alone.
+     */
+    function exitTargetOf(input) {
+      const id = input.activeChannelId
+      if (typeof id !== 'string' || id === '') return undefined
+      const channels = input.channels
+      if (!Array.isArray(channels) || channels.indexOf(id) === -1) return undefined
+      return id
     }
 
     /**
@@ -2032,6 +2071,12 @@ window.__ModuleLoader__.load({
          because the host's InputBar auto-focuses every pane and the last mount wins
          (spec §5.1, requirement 2). */
       const [focusId, setFocusId] = useState(undefined)
+      /* Jumping to or creating a channel means "this is where I am now": one of the three
+         explicit activations that decide where 常规视图 lands (spec §5.1). */
+      const focusChannel = (sessionId) => {
+        view.setActive(sessionId)
+        setFocusId(sessionId)
+      }
       /* The last thing the bar must tell the user (a failed create, a failed archive).
          A failed action must not look like a no-op: the host reports its own through the
          notify service, so ours reports through the bar it already owns. */
@@ -2194,7 +2239,7 @@ window.__ModuleLoader__.load({
            order plus the two jump commands, and clears them on unmount: a keypress can
            never act on a list from an unmounted panel (spec §5.6). */
         view.publish(visible, {
-          focus: (sessionId) => setFocusId(sessionId),
+          focus: focusChannel,
           step: (delta) => {
             const ids = visible
             if (ids.length === 0) return
@@ -2202,7 +2247,7 @@ window.__ModuleLoader__.load({
             const index = currentId === undefined ? -1 : ids.indexOf(currentId)
             const base = index === -1 ? (delta > 0 ? -1 : 0) : index
             const target = ids[(base + delta + ids.length) % ids.length]
-            if (target !== undefined) setFocusId(target)
+            if (target !== undefined) focusChannel(target)
           },
         })
         return () => { view.publish([]) }
@@ -2261,7 +2306,7 @@ window.__ModuleLoader__.load({
         /* Until the host list catalogues it, this id is exempt from the prune below. */
         ledger.note(sessionId, 'born')
         actions.setChannels(moveChannel(visibleRef.current, sessionId, 0))
-        setFocusId(sessionId)
+        focusChannel(sessionId)
       }
       const createChannel = (workspaceId) => {
         const targetWorkspace = workspaces.find(workspace => workspace.workspaceId === workspaceId)
@@ -2380,7 +2425,19 @@ window.__ModuleLoader__.load({
         actions.setWeights({ ...weights, [beforeId]: beforeWeight, [afterId]: afterWeight })
       }
 
-      return h('div', { style: CSS.root },
+      /* A CAPTURE-phase handler on the panel root (spec §5.1): a pointer or key down
+         inside a channel is the only signal that makes it the current channel. The host's
+         InputBar auto-focuses every pane on mount and the last mount wins, so a focus
+         listener would make "rendered last" look like an intention. */
+      const noteActivation = (event) => {
+        const sessionId = channelDom.channelOf(event.target)
+        if (sessionId !== undefined) view.setActive(sessionId)
+      }
+      return h('div', {
+        style: CSS.root,
+        onMouseDownCapture: noteActivation,
+        onKeyDownCapture: noteActivation,
+      },
         /* Activation for the SHIPPED composer, which we cannot give a class to. The
            host publishes stable hooks on its own markup, so a scoped rule reaches the
            input card itself:
@@ -2540,6 +2597,7 @@ window.__ModuleLoader__.load({
       heroFor,
       blankTargetFor,
       shouldReclaimPanel,
+      exitTargetOf,
       archiveActivityOf,
       resizedWeights,
       crumbsFor,
@@ -2645,6 +2703,11 @@ window.__ModuleLoader__.load({
            not a licence to reclaim later (spec §5.1, ADR-0003). */
         const RECLAIM_WINDOW_MS = 2000
         let leftMixerAt = 0
+        /* Set the moment the user asks to leave (常规视图, a file link) and consumed by the
+           exit it causes: a deliberate exit is final, even onto a blank Session, and it
+           also closes the window so nothing else inside it can bounce the user back
+           (spec §5.1, ADR-0003). */
+        let exitRequested = false
         let previousPanelId = ctx.layout.panelInfo.getSnapshot().activePanelId
         /* What `mainView` points at right now, as `{ id, blank }`. Read-only: the
            convention is the host's and writing it is forbidden (docs/adr/0001). Two ids
@@ -2670,10 +2733,39 @@ window.__ModuleLoader__.load({
             return
           }
           const revealed = revealedMainView()
-          if (!shouldReclaimPanel({ leftMixer, activePanelId, revealed })) return
+          const userInitiatedExit = exitRequested
+          exitRequested = false
+          if (!shouldReclaimPanel({ leftMixer, activePanelId, revealed, userInitiatedExit })) {
+            /* A deliberate exit also closes the window: the reveal that just happened is
+               the LANDING, not a host navigation to undo (spec §5.1). */
+            if (userInitiatedExit) leftMixerAt = 0
+            return
+          }
           view.handOff(revealed.id)
           leftMixerAt = 0
           ctx.layout.selectPanel(PANEL_ID)
+        }
+        /* Leave the mixer onto the Session the user was working in (spec §5.1).
+           `uiWorkspace.openSession` is the host's own sidebar-row path: it replaces the
+           `mainView` reference AND deselects the panel in one call
+           (`ui-workspace/src/client/navigation.ts:276-278`, tail `:528`), so there is one
+           landing instead of a reveal racing a `selectPanel(null)`. Falls back to the
+           plain exit when no channel was activated or the host moved on without the
+           method. */
+        const leaveMixer = () => {
+          exitRequested = true
+          const target = exitTargetOf({ activeChannelId: view.activeChannel(), channels: view.channels() })
+          if (target !== undefined && typeof ctx.uiWorkspace.openSession === 'function') {
+            try {
+              ctx.uiWorkspace.openSession(target)
+              return
+            } catch (error) {
+              /* `retain` can refuse a Session that vanished under us. The panel was not
+                 touched yet, so the plain exit is still a correct landing. */
+              console.error('[mixer] openSession failed on exit; falling back', error)
+            }
+          }
+          ctx.layout.selectPanel(null)
         }
         ctx.effect(() => {
           const stopList = ctx.sessions.list.subscribe(() => {
@@ -2716,8 +2808,10 @@ window.__ModuleLoader__.load({
                `index.ts:139`), so selecting the key instead left the Sidebar unnamed and
                every file link in the regular view threw
                `sidebarRight: no session surface is mounted` until a sidebar row was
-               clicked. `null` is what the host's own row exit uses (spec §7.4). */
-            backToConversation: () => ctx.layout.selectPanel(null),
+               clicked. `null` is what the host's own row exit uses (spec §7.4).
+               Since v1.6 the exit additionally LANDS on the current channel through the
+               host's own `openSession`, which deselects the panel itself (spec §5.1). */
+            backToConversation: leaveMixer,
             createSession,
             archiveSession,
             unarchiveSession,

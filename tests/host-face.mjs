@@ -61,6 +61,7 @@ export function createHostFace({ viewEntries = [] } = {}) {
     create: [],
     archive: [],
     unarchive: [],
+    openSession: [],
     shortcuts: [],
   }
   const failures = {
@@ -104,8 +105,20 @@ export function createHostFace({ viewEntries = [] } = {}) {
       toggleSidebar: () => {},
       panelInfo,
     },
-    /* The two calls the sidebar's own row action makes (navigation.ts:272 / :277). */
+    /* The two calls the sidebar's own row action makes (navigation.ts:272 / :277), plus
+       the row's own reveal (`openSession`, navigation.ts:276-278) which spec §5.1 uses to
+       land 常规视图 on the active channel and spec §7.4 to open a file link from a channel.
+       Faithful to the host's own sequence: retain the Session as `mainView` (a list
+       publish) and THEN deselect the panel (:506 / :528) — the order the plugin's
+       reclaim watcher sees in a browser. */
     uiWorkspace: {
+      openSession: (sessionId) => {
+        calls.openSession.push(sessionId)
+        const snapshot = list.getSnapshot()
+        const row = snapshot.byId[sessionId] ?? { id: sessionId }
+        list.set({ ...snapshot, byId: { ...snapshot.byId, [sessionId]: { ...row, retainedBy: { mainView: 1 } } } })
+        panelInfo.set({ activePanelId: null })
+      },
       archiveSession: (sessionId, options) => {
         calls.archive.push({ sessionId, options })
         /* A service that THROWS instead of rejecting: the "click does nothing" class. */

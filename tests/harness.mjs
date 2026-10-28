@@ -204,6 +204,7 @@ export function createHost(definition, { viewEntries = DEFAULT_VIEW_ENTRIES } = 
     createCalls: face.calls.create,
     archiveCalls: face.calls.archive,
     unarchiveCalls: face.calls.unarchive,
+    openSessionCalls: face.calls.openSession,
     shortcutCommands: face.calls.shortcuts,
     setList: face.list.set,
     setPanelInfo: face.panelInfo.set,

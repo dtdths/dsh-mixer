@@ -1004,3 +1004,55 @@ test('interaction: a dragged channel opens a same-width slot where it would land
   /* The order itself is untouched until the drop commits. */
   assert.deepEqual(ui.$$('[data-mixer-cell]').map(node => node.getAttribute('data-mixer-cell')), ['s1', 's2'])
 })
+
+test('interaction: 常规视图 lands on the channel the user is working in (§5.1)', async () => {
+  const ui = await mountTwo()
+  const { act, window } = ui
+  /* Activation is ONE explicit signal: a pointer down inside the channel. The host's
+     composer auto-focus does not count — it fires for every pane on mount and the last
+     one wins, so "focused" alone would just mean "rendered last" (spec §5.1). */
+  const pane = ui.$('[data-mixer-pane="s2"]')
+  act(() => { pane.dispatchEvent(new window.MouseEvent('mousedown', { bubbles: true })) })
+  const button = [...ui.document.querySelectorAll('button')]
+    .find(node => (node.textContent || '').trim() === '常规视图')
+  assert.ok(button !== undefined, 'the top bar must offer the way back')
+  act(() => { button.dispatchEvent(new window.MouseEvent('click', { bubbles: true })) })
+  /* `openSession` is the host's own sidebar-row exit (navigation.ts:276-278): it sets the
+     Session the regular view shows AND deselects the panel in one call. */
+  assert.deepEqual(ui.host.openSessionCalls, ['s2'])
+  /* …so the plugin must not ALSO call selectPanel(null): that would be a second exit
+     racing the first, and it is the pre-v1.6 landing this replaces. */
+  assert.deepEqual(ui.host.selectPanelCalls, [])
+})
+
+test('interaction: a keyboard jump counts as working in that channel (§5.1/§5.6)', async () => {
+  const ui = await mountTwo()
+  const { act, window } = ui
+  act(() => { ui.host.setPanelInfo({ activePanelId: 'mixer' }) })
+  const command = ui.host.shortcutCommands.find(entry => entry.id === 'mixer.channel.2')
+  const outcome = command.resolve()
+  assert.equal(outcome.status, 'handled')
+  act(() => { outcome.run() })
+  const button = [...ui.document.querySelectorAll('button')]
+    .find(node => (node.textContent || '').trim() === '常规视图')
+  act(() => { button.dispatchEvent(new window.MouseEvent('click', { bubbles: true })) })
+  assert.deepEqual(ui.host.openSessionCalls, ['s2'])
+})
+
+test('interaction: leaving onto a blank Session is not undone by the reclaim (§5.1)', async () => {
+  const ui = await mountTwo()
+  const { act, window } = ui
+  act(() => { ui.host.setPanelInfo({ activePanelId: 'mixer' }) })
+  /* The channel carries a Session with no history. That is EXACTLY the shape the reclaim
+     reads as "the host just revealed a new Session", so this is the case that used to
+     take the panel back and made the mixer impossible to leave (spec §5.1). */
+  const blanked = { ...list, byId: { ...list.byId, s2: { ...list.byId.s2, blank: true } } }
+  act(() => { ui.host.setList(blanked) })
+  act(() => { ui.$('[data-mixer-pane="s2"]').dispatchEvent(new window.MouseEvent('mousedown', { bubbles: true })) })
+  const button = [...ui.document.querySelectorAll('button')]
+    .find(node => (node.textContent || '').trim() === '常规视图')
+  act(() => { button.dispatchEvent(new window.MouseEvent('click', { bubbles: true })) })
+  assert.deepEqual(ui.host.openSessionCalls, ['s2'])
+  assert.deepEqual(ui.host.selectPanelCalls, [], 'a deliberate exit must never bounce back')
+  assert.equal(ui.host.panelInfo().activePanelId, null)
+})
