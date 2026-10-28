@@ -16,7 +16,7 @@
 - 语音 / 多媒体通道。
 - **UI 文案接 locale 服务**（用户 2026-10-15 定：留作二期）。本期文案硬编码中文，见 §9。
 
-**交付形态**：只装 Client half，**不发布 npm**（`package.json` 是 `private: true`）。三条安装路径：仓库目录 `link:`（开发、热更新）/ git tag `github:dtdths/dsh-mixer#vN.N.N`（冻结版本）/ `.tgz`（离线）。**当前发布版 `v1.6.0`**（此前 `v1.5.2` / `v1.5.1` / `v1.5.0` / `v1.4.0` / `v1.3.0` / `v1.2.0` / `v1.1.0` / `v1.0.0`）：`main` 与 `feat/mixer-v1` 同点，GitHub Release 里有安装命令与验证过的 DSH runtime 版本；步骤见 `README.md`「安装」「发布」。
+**交付形态**：只装 Client half，**不发布 npm**（`package.json` 是 `private: true`）。三条安装路径：仓库目录 `link:`（开发、热更新）/ git tag `github:dtdths/dsh-mixer#vN.N.N`（冻结版本）/ `.tgz`（离线）。**当前发布版 `v1.6.1`**（此前 `v1.6.0` / `v1.5.2` / `v1.5.1` / `v1.5.0` / `v1.4.0` / `v1.3.0` / `v1.2.0` / `v1.1.0` / `v1.0.0`）：`main` 与 `feat/mixer-v1` 同点，GitHub Release 里有安装命令与验证过的 DSH runtime 版本；步骤见 `README.md`「安装」「发布」。
 
 ## 2. 包结构
 
@@ -792,6 +792,15 @@ fast-forward，tag **`v1.6.0`** + GitHub Release。内容三项：① 「常规�
 冷启动 `PASS`；验证过的 DSH runtime：`0.2.1-rc.2`（checkout `687f282`）。**真机复验通过**（沙箱宿主 + 无头
 Chrome，证据 `repro-sidebarright/evidence/18-*`；R1 落点正确、R2 点完链接右栏确实打开该文件），用户在自用 GUI
 上手动复验通过。
+
+**发布 v1.6.1（2026-10-28，调音台里三类「点了没反应 / 报错」的打开入口）**：`package.json` bump 到 `1.6.1`，
+`main` fast-forward，tag **`v1.6.1`** + GitHub Release。内容：① 输入框里的 `@` 引用点了没反应（Lexical
+decorator，宿主链路无 try/catch）→ 改成"离开后在常规视图的输入框里重放同一个 chip"（§7.4 第六步）；
+② 已发送消息里的 `@` 引用"切了视图但没打开" → 重放要带 `detail: 0` 与 `currentTarget`
+（`ReferenceChip` 的激活守卫会读它们）；③ 交付物卡片的预览按钮同一个错 → 纳入白名单（§7.4 白名单第四种渲染）；
+④ 补记：`plan-review` / `question` 两种等待态真机实测通过（§6.25 / §9.1 关闭缺口）。`npm run check` = 110 用例 +
+冷启动 `PASS`；验证过的 DSH runtime：`0.2.1-rc.2`（checkout `687f282`）。真机证据：`repro-sidebarright/evidence/19-*`
+与 `20-*`；用户在自用 GUI 上复验通过。
 
 **发布 v1.5.1（2026-10-21，空板新建 bug 修复 + 文档 + README 改版）**：`package.json` bump 到 `1.5.1`，`main` fast-forward，tag **`v1.5.1`** + GitHub Release。内容三项：① **修 bug**（`5c0e57f`）—— 空板上点 `＋会话` 会把其它**可见**通道挤掉：`acceptNewChannel` 拿"持久化的板"（可能为空数组）当插入基准，改用 `visibleRef`（看得见的板），回归用例先红后绿验证过（`interaction` 的「空板上新建通道保留可见通道」）；② 文档两条（`2e82168` 格内审批卡 §6.25 端到端实测、`c3b81c9` 侧栏折叠观察记为非 bug）；③ **README 改版**（`98461ce` / `30bb861`）—— 卖点先行 + 一行安装命令 + 上手指南 + 真实宿主截图（`docs/assets/`，含 `PROVENANCE.md`；主图三格同框：空对话 / 等待审批 / 执行中）。`npm run check` = 96 用例 + 冷启动 `PASS`；验证过的 DSH runtime：`0.2.1-rc.2`（checkout `687f282`）。
 
