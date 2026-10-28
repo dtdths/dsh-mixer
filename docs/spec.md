@@ -16,7 +16,7 @@
 - 语音 / 多媒体通道。
 - **UI 文案接 locale 服务**（用户 2026-10-15 定：留作二期）。本期文案硬编码中文，见 §9。
 
-**交付形态**：只装 Client half，**不发布 npm**（`package.json` 是 `private: true`）。三条安装路径：仓库目录 `link:`（开发、热更新）/ git tag `github:dtdths/dsh-mixer#vN.N.N`（冻结版本）/ `.tgz`（离线）。**当前发布版 `v1.5.2`**（此前 `v1.5.1` / `v1.5.0` / `v1.4.0` / `v1.3.0` / `v1.2.0` / `v1.1.0` / `v1.0.0`）：`main` 与 `feat/mixer-v1` 同点，GitHub Release 里有安装命令与验证过的 DSH runtime 版本；步骤见 `README.md`「安装」「发布」。
+**交付形态**：只装 Client half，**不发布 npm**（`package.json` 是 `private: true`）。三条安装路径：仓库目录 `link:`（开发、热更新）/ git tag `github:dtdths/dsh-mixer#vN.N.N`（冻结版本）/ `.tgz`（离线）。**当前发布版 `v1.6.0`**（此前 `v1.5.2` / `v1.5.1` / `v1.5.0` / `v1.4.0` / `v1.3.0` / `v1.2.0` / `v1.1.0` / `v1.0.0`）：`main` 与 `feat/mixer-v1` 同点，GitHub Release 里有安装命令与验证过的 DSH runtime 版本；步骤见 `README.md`「安装」「发布」。
 
 ## 2. 包结构
 
@@ -754,6 +754,14 @@ fast-forward，tag **`v1.5.2`** + GitHub Release。内容：**修 bug**（`55ccd
 - 调音台内的文件链接改为：capture 吞点击 → `openSession(该格会话)` → **跨帧重试**重放宿主的 `onClick`（path + cwd 只在那个闭包里）。失效方向 = **放行原点击**；`sidebarRight` 用 `ctx.get` 可选读、不加服务边（ADR-0004）。
 - **真机复验（沙箱宿主 4599 + 无头 Chrome，证据在 `repro-sidebarright/evidence/18-*`）**：R1 通过（进调音台前的会话是 B，激活 A 的通道后退出 → 落在 A）；R2 通过（点 A 通道里的链接 → 落在 A，右栏自动展开并出现该文件的新标签，内容正确、无对话框、无 `no session surface is mounted`）。**首版在这一步失败**：切换成功但文件没打开、也没有任何提示 —— 原因是宿主的 `openFile` 是 async，失败以 rejected promise 回来，`try/catch` 拦不住；改成 `FILE_LINK_REPLAY_FRAMES` 有界跨帧重试后通过，并补了一条用例钉住它。
 - 未做：composer `@` chip 接管、OS 打开通道。**待用户实机验收 §6.27 / §6.28 / §6.29**。
+
+**发布 v1.6.0（2026-10-28，退出跟随当前通道 + 调音台内文件链接）**：`package.json` bump 到 `1.6.0`，`main`
+fast-forward，tag **`v1.6.0`** + GitHub Release。内容三项：① 「常规视图」落到**当前通道**（显式激活判据，§5.1）；
+② 顺手修掉「主会话是空白时退不出调音台」（用户主动离开闩，ADR-0003 的边界据此收窄）；③ 调音台内文件链接改为
+「capture 接管 → 切到该格会话 → **跨帧重试**重放宿主处理器」（§7.4 / ADR-0004）。`npm run check` = 108 用例 +
+冷启动 `PASS`；验证过的 DSH runtime：`0.2.1-rc.2`（checkout `687f282`）。**真机复验通过**（沙箱宿主 + 无头
+Chrome，证据 `repro-sidebarright/evidence/18-*`；R1 落点正确、R2 点完链接右栏确实打开该文件），用户在自用 GUI
+上手动复验通过。
 
 **发布 v1.5.1（2026-10-21，空板新建 bug 修复 + 文档 + README 改版）**：`package.json` bump 到 `1.5.1`，`main` fast-forward，tag **`v1.5.1`** + GitHub Release。内容三项：① **修 bug**（`5c0e57f`）—— 空板上点 `＋会话` 会把其它**可见**通道挤掉：`acceptNewChannel` 拿"持久化的板"（可能为空数组）当插入基准，改用 `visibleRef`（看得见的板），回归用例先红后绿验证过（`interaction` 的「空板上新建通道保留可见通道」）；② 文档两条（`2e82168` 格内审批卡 §6.25 端到端实测、`c3b81c9` 侧栏折叠观察记为非 bug）；③ **README 改版**（`98461ce` / `30bb861`）—— 卖点先行 + 一行安装命令 + 上手指南 + 真实宿主截图（`docs/assets/`，含 `PROVENANCE.md`；主图三格同框：空对话 / 等待审批 / 执行中）。`npm run check` = 96 用例 + 冷启动 `PASS`；验证过的 DSH runtime：`0.2.1-rc.2`（checkout `687f282`）。
 

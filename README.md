@@ -39,7 +39,7 @@
 
 ```bash
 # 一行装好（Web profile）
-dsh plugin --profile web add github:dtdths/dsh-mixer#v1.5.2
+dsh plugin --profile web add github:dtdths/dsh-mixer#v1.6.0
 ```
 
 > `dsh` 不在 PATH 里（从源码 checkout 跑）就用 `pnpm dsh plugin --profile web add …`，见下面折叠。
@@ -58,13 +58,13 @@ dsh web            # 或你平时启动 DSH 的方式
 **从 DSH 源码 checkout 运行**（仓库根目录）：
 
 ```bash
-pnpm dsh plugin --profile web add github:dtdths/dsh-mixer#v1.5.2
+pnpm dsh plugin --profile web add github:dtdths/dsh-mixer#v1.6.0
 ```
 
 **装在 Desktop 版**（先完整退出 Desktop，否则 profile 被占用）：
 
 ```bash
-dsh plugin --profile desktop add github:dtdths/dsh-mixer#v1.5.2
+dsh plugin --profile desktop add github:dtdths/dsh-mixer#v1.6.0
 ```
 
 **改代码 / 开发调试**（`link:` 本地目录，改完刷新即生效）：
@@ -76,11 +76,11 @@ dsh plugin --profile web add /绝对路径/dsh-mixer
 **完全离线**（打包成 tgz 传过去）：
 
 ```bash
-npm pack --cache /tmp/npm-cache        # 产出 dsh-mixer-1.5.2.tgz
-dsh plugin --profile web add /绝对路径/dsh-mixer-1.5.2.tgz
+npm pack --cache /tmp/npm-cache        # 产出 dsh-mixer-1.6.0.tgz
+dsh plugin --profile web add /绝对路径/dsh-mixer-1.6.0.tgz
 ```
 
-**不想敲命令**：如果你的 DSH 里有 `plugin_manager` 工具，直接在会话里说一句「安装插件 `github:dtdths/dsh-mixer#v1.5.2`」即可。
+**不想敲命令**：如果你的 DSH 里有 `plugin_manager` 工具，直接在会话里说一句「安装插件 `github:dtdths/dsh-mixer#v1.6.0`」即可。
 
 > 装过早期原型 `dsh-mixer-spike` 的话请先卸掉 —— 它和正式版会抢同一个视图入口。
 </details>
@@ -172,7 +172,7 @@ dsh-mixer/
 **dsh-mixer** is a mixer-style multi-session view for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness): several independent conversations side by side, each with its own history and composer, with the channels blocked on an approval or a question lit up — so nothing waits for you silently.
 
 ```bash
-dsh plugin --profile web add github:dtdths/dsh-mixer#v1.5.2
+dsh plugin --profile web add github:dtdths/dsh-mixer#v1.6.0
 ```
 
 Restart DSH, hard-refresh the page, then press the **Mixer** button in the session header (or type `/mixer`). Requires DSH 0.2.1+ web. Screenshots use fabricated demo data.
