@@ -62,6 +62,7 @@ export function createHostFace({ viewEntries = [] } = {}) {
     archive: [],
     unarchive: [],
     openSession: [],
+    openResource: [],
     shortcuts: [],
   }
   const failures = {
@@ -71,6 +72,10 @@ export function createHostFace({ viewEntries = [] } = {}) {
     archiveDelayMs: 0,
     unarchive: undefined,
     unarchiveThrows: undefined,
+    /* A profile that does not ship a service the plugin reads with `ctx.get`: the read
+       must degrade to undefined, not throw (`ui-chat/apply.ts:245` is the host's own
+       precedent, spec §7.4 / ADR-0004). */
+    missingService: undefined,
   }
   const list = createObservable(EMPTY_LIST)
   const panelInfo = createObservable(NO_PANEL)
@@ -139,6 +144,20 @@ export function createHostFace({ viewEntries = [] } = {}) {
         if (failures.unarchiveThrows !== undefined) throw failures.unarchiveThrows
         if (failures.unarchive !== undefined) return Promise.reject(failures.unarchive)
         return Promise.resolve()
+      },
+    },
+    /* The right Sidebar's face (`ui-sidebar-right/src/client/index.ts:151`
+       `reflect.provide('sidebarRight', controller)`). The plugin never calls it itself —
+       it only checks the panel is there before taking a host file link over, because
+       inside the mixer every open throws (spec §7.4 / ADR-0004). */
+    sidebarRight: {
+      openResource: (address, options) => {
+        calls.openResource.push({ address, options })
+        /* Faithful to the host: `require()` throws while no Session is on screen
+           (`ui-sidebar-right/src/client/service.ts:723-733`). */
+        if (panelInfo.getSnapshot().activePanelId !== null) {
+          throw new Error('sidebarRight: no session surface is mounted')
+        }
       },
     },
     /* The host's shortcut registry (spec §5.6). */

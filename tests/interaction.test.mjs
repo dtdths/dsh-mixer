@@ -10,7 +10,7 @@
  */
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { loadInteractive } from './harness.mjs'
+import { loadInteractive, hostModules } from './harness.mjs'
 
 const list = {
   ids: ['s1', 's2', 's3'],
@@ -1055,4 +1055,92 @@ test('interaction: leaving onto a blank Session is not undone by the reclaim (§
   assert.deepEqual(ui.host.openSessionCalls, ['s2'])
   assert.deepEqual(ui.host.selectPanelCalls, [], 'a deliberate exit must never bounce back')
   assert.equal(ui.host.panelInfo().activePanelId, null)
+})
+
+/** Mount two channels whose bodies carry the host's real file-link markup. */
+async function mountWithFileLinks() {
+  const { React } = hostModules()
+  const opened = []
+  /* What the host's own 「无法打开文件」 dialog reports (ui-chat renders the rejection). */
+  const failed = []
+  const holder = { ctx: undefined }
+  const ui = await loadInteractive({
+    renderFactorySlot: (name, input) => React.createElement('div', { 'data-factory': name },
+      React.createElement('button', {
+        type: 'button',
+        className: '_0NrVSW_fileLink_test',
+        onClick: () => {
+          /* The host's own handler: open through the right Sidebar, which throws while a
+             panel owns the main column (spec §7.4). `openFile` is async in the host, so the
+             throw surfaces as the dialog rather than a crash. */
+          try {
+            holder.ctx.get('sidebarRight').openResource('src/thing.ts')
+            opened.push(input.variant)
+          } catch (error) {
+            failed.push(String(error.message))
+          }
+        },
+      }, 'src/thing.ts')),
+  })
+  ui.draw({ board: { channels: ['s1', 's2'], weights: {} }, list, status, workspaces })
+  holder.ctx = ui.host.ctx
+  return { ui, opened, failed }
+}
+
+test('interaction: a file link leaves to its own channel, then the host opens it (§7.4)', async () => {
+  const { ui, opened } = await mountWithFileLinks()
+  const { act, window } = ui
+  act(() => { ui.host.setPanelInfo({ activePanelId: 'mixer' }) })
+  /* The reported symptom, reproduced: inside the mixer the right Sidebar names nobody. */
+  assert.throws(
+    () => ui.host.ctx.get('sidebarRight').openResource('src/thing.ts'),
+    /no session surface is mounted/,
+  )
+  const link = ui.$('[data-mixer-pane="s2"] [class*="fileLink"]')
+  assert.ok(link !== null, 'the pane must render the host file link')
+  const before = ui.host.openResourceCalls.length
+  await act(async () => {
+    link.dispatchEvent(new window.MouseEvent('click', { bubbles: true, cancelable: true }))
+    /* The replay runs on the next frame, once the regular view has painted. */
+    await new Promise(resolve => setTimeout(resolve, 80))
+  })
+  /* The click left on the Session the link BELONGS to, not on the active channel. */
+  assert.deepEqual(ui.host.openSessionCalls, ['s2'])
+  /* The host's own handler ran exactly once, on the far side, and the open succeeded. */
+  assert.equal(opened.length, 1)
+  assert.deepEqual(ui.host.openResourceCalls.slice(before).map(call => call.address), ['src/thing.ts'])
+})
+
+test('interaction: a file link the plugin cannot take over keeps the host behaviour (§7.4)', async () => {
+  const { React } = hostModules()
+  let opened = 0
+  const ui = await loadInteractive({
+    renderFactorySlot: (name) => React.createElement('div', { 'data-factory': name },
+      /* Looks like a file link, carries no handler the plugin could replay. */
+      React.createElement('button', { type: 'button', className: '_0NrVSW_fileLink_test' }, 'src/thing.ts')),
+  })
+  ui.draw({ board: { channels: ['s1', 's2'], weights: {} }, list, status, workspaces })
+  const { act, window } = ui
+  act(() => { ui.host.setPanelInfo({ activePanelId: 'mixer' }) })
+  const link = ui.$('[data-mixer-pane="s2"] [class*="fileLink"]')
+  act(() => { link.dispatchEvent(new window.MouseEvent('click', { bubbles: true, cancelable: true })) })
+  /* Degradation is "do nothing", never " swallow the click" (ADR-0004). */
+  assert.deepEqual(ui.host.openSessionCalls, [])
+  assert.equal(opened, 0)
+  assert.ok(ui.$('[data-mixer-pane="s2"]') !== null, 'the mixer must still be on screen')
+})
+
+test('interaction: without a right Sidebar the plugin never takes a file link over (§7.4)', async () => {
+  const { ui, failed } = await mountWithFileLinks()
+  const { act, window } = ui
+  act(() => { ui.host.setPanelInfo({ activePanelId: 'mixer' }) })
+  /* A profile that does not ship the right panel: nothing to open INTO, so the plugin
+     must stay out of the way instead of leaving the view for nothing (ADR-0004). */
+  ui.host.setMissingService('sidebarRight')
+  const link = ui.$('[data-mixer-pane="s2"] [class*="fileLink"]')
+  act(() => { link.dispatchEvent(new window.MouseEvent('click', { bubbles: true, cancelable: true })) })
+  /* The host's own handler ran and reported its own visible failure; no view switch. */
+  assert.equal(failed.length, 1)
+  assert.deepEqual(ui.host.openSessionCalls, [])
+  assert.ok(ui.$('[data-mixer-pane="s2"]') !== null)
 })

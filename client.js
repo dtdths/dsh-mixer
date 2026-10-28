@@ -107,6 +107,18 @@ window.__ModuleLoader__.load({
     const PANEL_ID = 'mixer'
     /** Our own Session reference source; never `mainView` (see docs/adr/0001). */
     const SOURCE = 'mixerChannel'
+    /**
+     * The three host renderings of "open this file" inside a channel, as one selector
+     * (spec §7.4 / ADR-0004): the markdown body link (`_fileMention_… _fileLink_…`), the
+     * tool-row link (`_<hash>_fileLink`), and a sent message's `@`-chip
+     * (`data-ref-chip="file"`). Class names are build-hashed, so each is matched by
+     * substring.
+     *
+     * The composer's own `@` chip is deliberately absent: it carries a basename only and
+     * is activated through Lexical's `CLICK_COMMAND`, so taking its click over would both
+     * lose the file and move the caret.
+     */
+    const FILE_LINK_SELECTOR = '[class*="fileLink"],[class*="fileMention"],[data-ref-chip="file"]'
     /** Default channel set before the user has picked one (decision: ticket #6). */
     const PANE_LIMIT = 3
     /** Fixed minimum pane width; more channels than fit scroll horizontally (#6). */
@@ -297,6 +309,27 @@ window.__ModuleLoader__.load({
           if (pane === null) return undefined
           const id = pane.getAttribute('data-mixer-pane')
           return id === null ? undefined : id
+        },
+        /* The host's file link a click landed in, or null (spec §7.4 / ADR-0004). */
+        fileLinkOf(element) {
+          if (element === null || element === undefined || typeof element.closest !== 'function') return null
+          return element.closest(FILE_LINK_SELECTOR)
+        },
+        /* The handler the host attached to that link, or undefined.
+         *
+         * React 18 parks a DOM node's props on the node itself under `__reactProps$…`, and
+         * that is the ONLY way to reach `onOpenFile(path, { line })` — the path lives in
+         * the closure and never enters the DOM (the tool-row link renders a summary, the
+         * markdown link's `title` is dropped for image previews). Losing this key is the
+         * one failure mode of the interception, and it must degrade to "leave the click
+         * alone" rather than to a dead click (ADR-0004). */
+        hostClickOf(element) {
+          if (element === null || element === undefined || typeof element !== 'object') return undefined
+          const key = Object.keys(element).find(name => name.startsWith('__reactProps$'))
+          if (key === undefined) return undefined
+          const props = element[key]
+          const onClick = props === null || props === undefined ? undefined : props.onClick
+          return typeof onClick === 'function' ? onClick : undefined
         },
         caretChannel() {
           const active = documentOf() === undefined ? null : documentOf().activeElement
@@ -2057,7 +2090,7 @@ window.__ModuleLoader__.load({
     function MixerPanel(props) {
       const {
         useSessions, useSessionStatus, useWorkspaces, SessionProvider, renderFactorySlot, refFor,
-        backToConversation, createSession, archiveSession, unarchiveSession,
+        backToConversation, canOpenFileLink, openFileLink, createSession, archiveSession, unarchiveSession,
         listViews, sidebar, useStore, actions,
         ledger, view,
       } = props
@@ -2425,18 +2458,36 @@ window.__ModuleLoader__.load({
         actions.setWeights({ ...weights, [beforeId]: beforeWeight, [afterId]: afterWeight })
       }
 
-      /* A CAPTURE-phase handler on the panel root (spec §5.1): a pointer or key down
-         inside a channel is the only signal that makes it the current channel. The host's
-         InputBar auto-focuses every pane on mount and the last mount wins, so a focus
-         listener would make "rendered last" look like an intention. */
+      /* Two CAPTURE-phase handlers on the panel root (spec §5.1 / §7.4).
+           - activation: a pointer or key down inside a channel is the only signal that
+             makes it the current channel. The host's InputBar auto-focuses every pane on
+             mount and the last mount wins, so a focus listener would make "rendered last"
+             look like an intention.
+           - file links: the host renders them as buttons whose handler lives in React
+             props, so the click has to be read in the capture phase — before React
+             dispatches the host's own bubble handler at the app root — and swallowed ONLY
+             when the takeover is actually possible (ADR-0004). */
       const noteActivation = (event) => {
         const sessionId = channelDom.channelOf(event.target)
         if (sessionId !== undefined) view.setActive(sessionId)
+      }
+      const onFileLinkClick = (event) => {
+        const link = channelDom.fileLinkOf(event.target)
+        if (link === null) return
+        const sessionId = channelDom.channelOf(link)
+        if (sessionId === undefined) return
+        const replay = channelDom.hostClickOf(link)
+        if (replay === undefined) return
+        if (typeof canOpenFileLink !== 'function' || canOpenFileLink() !== true) return
+        event.preventDefault()
+        event.stopPropagation()
+        openFileLink(sessionId, replay)
       }
       return h('div', {
         style: CSS.root,
         onMouseDownCapture: noteActivation,
         onKeyDownCapture: noteActivation,
+        onClickCapture: onFileLinkClick,
       },
         /* Activation for the SHIPPED composer, which we cannot give a class to. The
            host publishes stable hooks on its own markup, so a scoped rule reaches the
@@ -2767,6 +2818,53 @@ window.__ModuleLoader__.load({
           }
           ctx.layout.selectPanel(null)
         }
+        /* Cordis's optional service read: `undefined` instead of a throw, so a profile
+           without the right panel simply does not get the file-link takeover (ADR-0004). */
+        const optionalService = (name) => {
+          try {
+            return typeof ctx.get === 'function' ? ctx.get(name) : undefined
+          } catch (error) {
+            console.error(`[mixer] optional service ${name} unavailable`, error)
+            return undefined
+          }
+        }
+        const canOpenFileLink = () => {
+          const rightbar = optionalService('sidebarRight')
+          if (rightbar === undefined || rightbar === null) return false
+          if (typeof rightbar.openResource !== 'function') return false
+          return typeof ctx.uiWorkspace.openSession === 'function'
+        }
+        /* Spec §7.4 / ADR-0004. Inside the mixer the right Sidebar names no Session
+           (`activePanelId !== null`), so the host's own file link throws
+           `sidebarRight: no session surface is mounted`. The plugin cannot open the file
+           itself — the path lives in the host's closure and never enters the DOM — so it
+           takes the click over, leaves onto the channel the link belongs to, and replays
+           the host's own handler once the regular view has painted. */
+        const openFileLink = (sessionId, replay) => {
+          exitRequested = true
+          try {
+            ctx.uiWorkspace.openSession(sessionId)
+          } catch (error) {
+            console.error('[mixer] openSession failed on a file link; leaving the click alone', error)
+            exitRequested = false
+            return
+          }
+          const run = () => {
+            try {
+              /* The host handler reads only `stopPropagation` off its event. */
+              replay({ stopPropagation: () => {} })
+            } catch (error) {
+              /* The mixer is already unmounted, so there is no bar left to report on;
+                 the user is on the right Session and can click the link again (ADR-0004). */
+              console.error('[mixer] replaying a file link after leaving failed', error)
+            }
+          }
+          /* The right Sidebar names the Session synchronously (its store flushes sync), but
+             the per-Session store it opens into is adopted during render, so the host's own
+             call only succeeds from the next frame (ADR-0004). */
+          if (typeof requestAnimationFrame === 'function') requestAnimationFrame(run)
+          else setTimeout(run, 0)
+        }
         ctx.effect(() => {
           const stopList = ctx.sessions.list.subscribe(() => {
             maybeReclaim()
@@ -2812,6 +2910,11 @@ window.__ModuleLoader__.load({
                Since v1.6 the exit additionally LANDS on the current channel through the
                host's own `openSession`, which deselects the panel itself (spec §5.1). */
             backToConversation: leaveMixer,
+            /* Spec §7.4 / ADR-0004: the two halves of the file-link takeover. Split so the
+               panel can decide BEFORE it swallows the click — if the takeover is not
+               possible the host's own handler (and its visible error) must still run. */
+            canOpenFileLink,
+            openFileLink,
             createSession,
             archiveSession,
             unarchiveSession,

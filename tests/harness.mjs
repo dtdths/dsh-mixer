@@ -180,6 +180,11 @@ export function createHost(definition, { viewEntries = DEFAULT_VIEW_ENTRIES } = 
   const disposers = []
   const ctx = {
     inject: (deps, callback) => callback({ commandUi: face.services.commandUi }),
+    /* Cordis's optional service read: what the host's own client code uses for services a
+       profile may not ship (`ui-chat/apply.ts:245` `ctx.get('chatFileMentions')?.…`).
+       Returns undefined instead of throwing, which is exactly why the plugin uses it for
+       `sidebarRight` rather than a hard inject edge (spec §7.4). */
+    get: name => (face.failures.missingService === name ? undefined : face.services[name]),
     /* Run the effect body the way Cordis does (its returned disposer is kept), so the
        reclaim watcher really subscribes in tests. */
     effect: (body) => {
@@ -205,6 +210,7 @@ export function createHost(definition, { viewEntries = DEFAULT_VIEW_ENTRIES } = 
     archiveCalls: face.calls.archive,
     unarchiveCalls: face.calls.unarchive,
     openSessionCalls: face.calls.openSession,
+    openResourceCalls: face.calls.openResource,
     shortcutCommands: face.calls.shortcuts,
     setList: face.list.set,
     setPanelInfo: face.panelInfo.set,
@@ -214,6 +220,8 @@ export function createHost(definition, { viewEntries = DEFAULT_VIEW_ENTRIES } = 
     setArchiveDelay: (ms) => { failures.archiveDelayMs = ms },
     setUnarchiveFailure: (error) => { failures.unarchive = error },
     setUnarchiveThrow: (error) => { failures.unarchiveThrows = error },
+    /* Pretend this profile does not ship a service the plugin reads with `ctx.get`. */
+    setMissingService: (name) => { failures.missingService = name },
     panelInfo: () => face.panelInfo.getSnapshot(),
     dispose: () => { for (const dispose of disposers) dispose() },
   }
@@ -306,7 +314,7 @@ export async function loadRendered(options = {}) {
  * @returns the mount helper plus everything the caller needs to assert.
  */
 export async function loadInteractive(options = {}) {
-  const { withStore = true, viewEntries = DEFAULT_VIEW_ENTRIES, withComposer = true } = options
+  const { withStore = true, viewEntries = DEFAULT_VIEW_ENTRIES, withComposer = true, renderFactorySlot: factorySlot } = options
   const { window } = setupDom()
   const { React, createRoot, act } = hostModules()
   const storeModule = createStoreStub()
@@ -315,9 +323,11 @@ export async function loadInteractive(options = {}) {
   const instance = host.main.options.store.create()
   const container = window.document.getElementById('root')
   const root = createRoot(container)
-  /* Factory calls, including the `views` seam the pane pins a view through. */
+  /* Factory calls, including the `views` seam the pane pins a view through. A caller may
+     supply its own factory so a pane's body can carry the host markup a test needs (the
+     file links of spec §7.4 are host-rendered buttons that the harness cannot invent). */
   const factoryCalls = []
-  const renderFactorySlot = (name, input, slotOptions) => {
+  const renderFactorySlot = factorySlot ?? ((name, input, slotOptions) => {
     factoryCalls.push({ name, input })
     if (slotOptions !== undefined && slotOptions.slots !== undefined && slotOptions.slots.views !== undefined) {
       slotOptions.slots.views({
@@ -331,7 +341,7 @@ export async function loadInteractive(options = {}) {
       'data-hero': input.hero === true ? 'yes' : 'no',
       tabIndex: 0,
     }, withComposer ? React.createElement('input', { 'data-composer': '' }) : null)
-  }
+  })
   let snapshots = { list: undefined, status: new Map(), workspaces: undefined }
   /**
    * Render the panel with the given snapshots (unset keys keep their previous value).

@@ -556,3 +556,29 @@ test('createViewState: the active channel is an explicit signal and never re-ren
   assert.equal(view.activeChannel(), undefined)
 })
 
+test('createChannelDom: the file-link hooks and the props read are spelled in one place', () => {
+  const dom = createChannelDom()
+  /* The three host renderings of "open this file" (spec §7.4 / ADR-0004). The composer's
+     `@` chip is deliberately NOT in the list: it carries a basename only, and stopping
+     its click breaks Lexical's caret placement. */
+  let asked
+  const link = { closest: selector => { asked = selector; return link } }
+  assert.equal(dom.fileLinkOf(link), link)
+  assert.match(asked, /fileLink/)
+  assert.match(asked, /fileMention/)
+  assert.match(asked, /data-ref-chip/)
+  assert.doesNotMatch(asked, /data-composer-chip/)
+  assert.equal(dom.fileLinkOf(null), null)
+  assert.equal(dom.fileLinkOf({}), null)
+  assert.equal(dom.fileLinkOf({ closest: () => null }), null)
+
+  /* React 18 parks the host's own handler props on the DOM node under `__reactProps$…`.
+     Losing that key is the ONE failure mode of the interception, and it must degrade to
+     "do nothing" rather than to a dead click (ADR-0004). */
+  const onClick = () => {}
+  assert.equal(dom.hostClickOf({ '__reactProps$abc': { onClick } }), onClick)
+  assert.equal(dom.hostClickOf({ '__reactProps$abc': {} }), undefined)
+  assert.equal(dom.hostClickOf({ '__reactProps$abc': { onClick: 'nope' } }), undefined)
+  assert.equal(dom.hostClickOf({}), undefined)
+  assert.equal(dom.hostClickOf(null), undefined)
+})
