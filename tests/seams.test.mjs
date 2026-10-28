@@ -556,6 +556,38 @@ test('createViewState: the active channel is an explicit signal and never re-ren
   assert.equal(view.activeChannel(), undefined)
 })
 
+test('createChannelDom: the composer @ chip is a Lexical decorator, so it is re-clicked', () => {
+  const dom = createChannelDom()
+  /* Detection: the chip is the decorator span the editor writes, not a React link. */
+  let asked
+  const chip = { closest: selector => { asked = selector; return chip } }
+  assert.equal(dom.composerChipOf(chip), chip)
+  assert.match(asked, /data-composer-chip/)
+  assert.equal(dom.composerChipOf(null), null)
+  assert.equal(dom.composerChipOf({}), null)
+
+  /* Re-fire: Lexical opens a composer reference from a CLICK_COMMAND on the editor root,
+     so the replay has to be real events bubbling up — there is no handler to call. */
+  const seen = []
+  const fakeChip = {
+    ownerDocument: {
+      defaultView: {
+        MouseEvent: class {
+          constructor(type, init) { this.type = type; this.init = init }
+        },
+      },
+    },
+    dispatchEvent(event) { seen.push({ type: event.type, bubbles: event.init.bubbles, view: event.init.view !== undefined }) ; return true },
+  }
+  assert.equal(dom.replayComposerChip(fakeChip), true)
+  assert.deepEqual(seen.map(entry => entry.type), ['mousedown', 'mouseup', 'click'])
+  assert.ok(seen.every(entry => entry.bubbles === true && entry.view === true))
+  /* No document/window (or no MouseEvent) must degrade, not throw. */
+  assert.equal(dom.replayComposerChip(null), false)
+  assert.equal(dom.replayComposerChip({}), false)
+  assert.equal(dom.replayComposerChip({ ownerDocument: { defaultView: {} }, dispatchEvent: () => true }), false)
+})
+
 test('createChannelDom: the file-link hooks and the props read are spelled in one place', () => {
   const dom = createChannelDom()
   /* The three host renderings of "open this file" (spec §7.4 / ADR-0004). The composer's

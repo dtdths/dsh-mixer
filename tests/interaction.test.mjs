@@ -1179,3 +1179,33 @@ test('interaction: the file-link replay retries while the right Sidebar is still
   assert.equal(opened, 1, 'the host handler must eventually succeed')
   assert.ok(attempts >= 3 && attempts <= 5, `expected a bounded retry, got ${attempts} attempts`)
 })
+
+test('interaction: a composer @ chip leaves and is re-clicked where the editor lives (§7.4)', async () => {
+  const { React } = hostModules()
+  const ui = await loadInteractive({
+    renderFactorySlot: (name) => React.createElement('div', { 'data-factory': name },
+      React.createElement('input', { 'data-composer': '' }),
+      React.createElement('span', { 'data-composer-chip': 'reference' }, 'report.ts')),
+  })
+  ui.draw({ board: { channels: ['s1'], weights: {} }, list, status, workspaces })
+  const { act, window, document } = ui
+  act(() => { ui.host.setPanelInfo({ activePanelId: 'mixer' }) })
+  const chip = ui.$('[data-mixer-pane] [data-composer-chip]')
+  assert.ok(chip !== null, 'the pane composer must carry the chip')
+  /* This harness renders no regular view, so stand in for its composer: the real one shows
+     the SAME draft (it travels with the Session), chip included. */
+  const regular = document.createElement('span')
+  regular.setAttribute('data-composer-chip', 'reference')
+  const seen = []
+  for (const type of ['mousedown', 'mouseup', 'click']) regular.addEventListener(type, () => seen.push(type))
+  document.body.appendChild(regular)
+  await act(async () => {
+    chip.dispatchEvent(new window.MouseEvent('click', { bubbles: true, cancelable: true }))
+    await new Promise(resolve => setTimeout(resolve, 150))
+  })
+  /* It left onto the chip's own Session… */
+  assert.deepEqual(ui.host.openSessionCalls, ['s1'])
+  /* …and re-fired the click where the editor lives, which is the only way a Lexical
+     decorator can be opened (there is no React handler to replay). */
+  assert.deepEqual(seen, ['mousedown', 'mouseup', 'click'])
+})

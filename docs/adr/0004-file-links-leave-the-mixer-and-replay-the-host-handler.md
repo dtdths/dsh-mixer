@@ -27,8 +27,17 @@
    宿主自己的 `openResource` 成功。重放必须是**重试**、且必须看 promise：宿主的 `openFile` 是 **async**
    （`ui-chat/apply.ts:258-263`），右栏还没接住写入时失败以 **rejected promise** 回来，光 `try/catch`
    拦不住 —— 2026-10-28 的真机实测正是这样丢掉了第一版（切过去了、文件没打开、也没有任何提示）。
+   **事件也必须像个事件**：`ReferenceChip` 的 `onClick` 读 `event.detail` 与
+   `event.currentTarget.ownerDocument`（`ui-primitives/src/user-text.tsx:52`），假事件要带 `detail: 0`
+   和 `currentTarget`/`target`，否则它抛 `Cannot read properties of undefined (reading 'ownerDocument')`
+   —— 同样表现为"切了但没打开"（v1.6.0 就是这么坏的，v1.6.1 修）。
 5. `sidebarRight` 用 `ctx.get('sidebarRight')` **可选读**，不加 Cordis 边：没装右栏的 profile 直接不接管
    （硬边会让没有该包的 profile 整页启动失败，`web/src/boot-client.ts:80-82`）。
+6. **输入框里的 `@` 引用走另一条路（v1.6.1）**：它是 Lexical 的 decorator，没有 React 处理器可重放，完整路径
+   只在编辑器节点里。所以它的接管是"**离开，然后在常规视图的输入框里把同一个 chip 重新点一次**"（草稿跟着
+   会话走）。两条硬约束都是真机撞出来的：① 必须等调音台真的卸载（`activePanelId === null`）再点，否则那个
+   click 会被插件自己的 capture 处理器再吃一次 → 无限递归；② 只认通道之外的 chip，且 `dispatchEvent` 的
+   `mousedown`/`mouseup`/`click` 都要 `bubbles: true` 才到得了 Lexical 的根。
 
 ## Consequences
 

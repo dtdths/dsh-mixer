@@ -187,6 +187,18 @@ onDragStart={e => { e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setDat
 
 另外：capture 阶段 `stopPropagation()` **确实能**挡住宿主的处理器，因为 React 把 `onClick` 委托在 app
 根容器上（`ui-renderer/src/client/index.ts:80`），bubble 阶段根本没机会跑；而 `preventDefault` 对这些
-`<button>`（不是 `<a href>`）没有意义。composer 的 `@` chip 不能接管：它只有 basename，且激活走 Lexical
-的 `CLICK_COMMAND`，吞掉点击会破坏光标落点。
+`<button>`（不是 `<a href>`）没有意义。
+
+### 9b. 重放一个「人点出来的」事件，有三条必须满足
+
+1. **事件要像个事件**：宿主的 chip 处理器在 `onClick` 里读 `event.detail` 和
+   `event.currentTarget.ownerDocument`（`ui-primitives/src/user-text.tsx:52`，用来忽略"选中文字时的点击"
+   和双击）。只给 `{stopPropagation}` 会抛 `Cannot read properties of undefined (reading 'ownerDocument')`
+   —— 而这个错误发生在异步链里，**既不会变成弹窗，也不会被重试逻辑看见**，表现就是"切了视图、文件没打开、
+   什么提示都没有"。给 `detail: 0`（= 程序触发）和 `currentTarget` 就够了。
+2. **别在宿主还挂着的时候重放**：如果重放的是"点 DOM"，而那块 DOM 还在自己插件的组件树里，click 会被自己的
+   capture 处理器再吃一次 → 无限递归（真机上是页面卡死，测试里是挂住 150s）。
+3. **Lexical 的 decorator 只能靠真实事件**：输入框里的 `@` chip 没有 React 处理器可重放，只有
+   `mousedown`/`mouseup`/`click` 带 `bubbles: true` 冒泡到编辑器根，`CLICK_COMMAND` 才会做工；而且要等
+   编辑器所在的那棵树真的渲染出来（本例：先离开面板，常规视图的输入框里草稿还在，那里才有编辑器）。
 

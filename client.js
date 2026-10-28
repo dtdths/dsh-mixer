@@ -119,6 +119,13 @@ window.__ModuleLoader__.load({
      * lose the file and move the caret.
      */
     const FILE_LINK_SELECTOR = '[class*="fileLink"],[class*="fileMention"],[data-ref-chip="file"]'
+    /**
+     * A reference chip in the composer (spec §7.4, "composer half"). It is a Lexical
+     * decorator — `createDOM` writes this hook and the node's full reference lives in the
+     * editor state, never in the DOM — so it cannot be handled by replaying a React
+     * handler the way the message links are.
+     */
+    const COMPOSER_CHIP_SELECTOR = '[data-composer-chip]'
     /** Default channel set before the user has picked one (decision: ticket #6). */
     const PANE_LIMIT = 3
     /** Fixed minimum pane width; more channels than fit scroll horizontally (#6). */
@@ -340,6 +347,43 @@ window.__ModuleLoader__.load({
           const props = element[key]
           const onClick = props === null || props === undefined ? undefined : props.onClick
           return typeof onClick === 'function' ? onClick : undefined
+        },
+        /* The composer's @ chip a click landed in, or null. */
+        composerChipOf(element) {
+          if (element === null || element === undefined || typeof element.closest !== 'function') return null
+          return element.closest(COMPOSER_CHIP_SELECTOR)
+        },
+        /* The composer chips OUTSIDE every channel — i.e. the regular view's composer. The
+           takeover matches by position, because the label is the only stable thing in the
+           DOM (the path lives in the editor node). Filtering the panes out matters: a click
+           re-fired while the mixer is still mounted would land on our own capture handler
+           and re-enter (found in a real browser, 2026-10-28). */
+        composerChips() {
+          return all(COMPOSER_CHIP_SELECTOR).filter(chip => this.channelOf(chip) === undefined)
+        },
+        /* Where a chip sits among the other chips of its own channel. */
+        composerChipIndex(chip) {
+          const pane = chip === null || chip === undefined || typeof chip.closest !== 'function'
+            ? null
+            : chip.closest('[data-mixer-pane]')
+          const scope = pane === null || pane === undefined ? documentOf() : pane
+          if (scope === undefined || scope === null || typeof scope.querySelectorAll !== 'function') return 0
+          return Math.max(0, [...scope.querySelectorAll(COMPOSER_CHIP_SELECTOR)].indexOf(chip))
+        },
+        /* Re-fire the click where the editor actually lives. Lexical opens a composer
+           reference from a CLICK_COMMAND handled on the editor root, so there is no handler
+           to call — the event has to bubble to that root for real (ADR-0004). */
+        replayComposerChip(chip) {
+          if (chip === null || chip === undefined || typeof chip.dispatchEvent !== 'function') return false
+          const doc = chip.ownerDocument
+          const view = doc === null || doc === undefined ? undefined : doc.defaultView
+          if (view === undefined || view === null || typeof view.MouseEvent !== 'function') return false
+          for (const type of ['mousedown', 'mouseup', 'click']) {
+            chip.dispatchEvent(new view.MouseEvent(type, {
+              bubbles: true, cancelable: true, view, detail: 1, button: 0,
+            }))
+          }
+          return true
         },
         caretChannel() {
           const active = documentOf() === undefined ? null : documentOf().activeElement
@@ -2100,7 +2144,8 @@ window.__ModuleLoader__.load({
     function MixerPanel(props) {
       const {
         useSessions, useSessionStatus, useWorkspaces, SessionProvider, renderFactorySlot, refFor,
-        backToConversation, canOpenFileLink, openFileLink, createSession, archiveSession, unarchiveSession,
+        backToConversation, canOpenFileLink, openFileLink, openComposerReference,
+        createSession, archiveSession, unarchiveSession,
         listViews, sidebar, useStore, actions,
         ledger, view,
       } = props
@@ -2482,16 +2527,28 @@ window.__ModuleLoader__.load({
         if (sessionId !== undefined) view.setActive(sessionId)
       }
       const onFileLinkClick = (event) => {
+        if (typeof canOpenFileLink !== 'function' || canOpenFileLink() !== true) return
+        /* The composer's @ chip first: it is a Lexical decorator, so it has no handler to
+           replay and gets the "leave, then click it again" treatment (spec §7.4). */
+        const chip = channelDom.composerChipOf(event.target)
+        if (chip !== null) {
+          const chipSession = channelDom.channelOf(chip)
+          if (chipSession === undefined) return
+          const index = channelDom.composerChipIndex(chip)
+          event.preventDefault()
+          event.stopPropagation()
+          openComposerReference(chipSession, index)
+          return
+        }
         const link = channelDom.fileLinkOf(event.target)
         if (link === null) return
         const sessionId = channelDom.channelOf(link)
         if (sessionId === undefined) return
         const replay = channelDom.hostClickOf(link)
         if (replay === undefined) return
-        if (typeof canOpenFileLink !== 'function' || canOpenFileLink() !== true) return
         event.preventDefault()
         event.stopPropagation()
-        openFileLink(sessionId, replay)
+        openFileLink(sessionId, link, replay)
       }
       return h('div', {
         style: CSS.root,
@@ -2838,6 +2895,9 @@ window.__ModuleLoader__.load({
             return undefined
           }
         }
+        /* True when leaving the mixer could let the host open something: the right Sidebar
+           has to exist (otherwise there is nothing to open into) and the reveal has to be
+           available. Gates BOTH halves — message links and the composer's @ chip. */
         const canOpenFileLink = () => {
           const rightbar = optionalService('sidebarRight')
           if (rightbar === undefined || rightbar === null) return false
@@ -2850,7 +2910,27 @@ window.__ModuleLoader__.load({
            itself — the path lives in the host's closure and never enters the DOM — so it
            takes the click over, leaves onto the channel the link belongs to, and replays
            the host's own handler once the regular view has painted. */
-        const openFileLink = (sessionId, replay) => {
+        const nextFrame = (fn) => {
+          if (typeof requestAnimationFrame === 'function') requestAnimationFrame(fn)
+          else setTimeout(fn, 16)
+        }
+        /* What the host's own handlers expect to receive. `ReferenceChip` guards activation
+           on `event.detail` and (for a real click) `event.currentTarget.ownerDocument`
+           (`ui-primitives/src/user-text.tsx:52`), so a bare `{stopPropagation}` is NOT
+           enough — it threw `Cannot read properties of undefined (reading 'ownerDocument')`
+           and the click was lost on the far side (found in a real browser, 2026-10-28).
+           `detail: 0` is the "programmatic" spelling: the human click already passed the
+           guard when we intercepted it. */
+        const replayEvent = (element) => ({
+          detail: 0,
+          target: element,
+          currentTarget: element,
+          preventDefault: () => {},
+          stopPropagation: () => {},
+        })
+        /* Leave, then replay the host's own link handler. `element` is the clicked node, so
+           the replay can hand the handler a plausible event (see replayEvent). */
+        const openFileLink = (sessionId, element, replay) => {
           exitRequested = true
           try {
             ctx.uiWorkspace.openSession(sessionId)
@@ -2867,27 +2947,51 @@ window.__ModuleLoader__.load({
           const attempt = (frame) => {
             let result
             try {
-              /* The host handler reads only `stopPropagation` off its event. */
-              result = replay({ stopPropagation: () => {} })
+              result = replay(replayEvent(element))
             } catch (error) {
               result = Promise.reject(error)
             }
             if (result === undefined || result === null || typeof result.then !== 'function') return
             result.catch((error) => {
-              if (frame + 1 < FILE_LINK_REPLAY_FRAMES) {
-                if (typeof requestAnimationFrame === 'function') requestAnimationFrame(() => attempt(frame + 1))
-                else setTimeout(() => attempt(frame + 1), 16)
-                return
-              }
+              if (frame + 1 < FILE_LINK_REPLAY_FRAMES) return nextFrame(() => attempt(frame + 1))
               /* Out of frames: the mixer is already unmounted, so there is no bar left to
                  report on. The user is on the right Session and the link is still there to
                  click again (ADR-0004). */
               console.error('[mixer] replaying a file link after leaving failed', error)
             })
           }
-          const start = () => attempt(0)
-          if (typeof requestAnimationFrame === 'function') requestAnimationFrame(start)
-          else setTimeout(start, 0)
+          nextFrame(() => attempt(0))
+        }
+        /* Spec §7.4, composer half (2026-10-28). A composer `@` chip is a Lexical decorator:
+           there is no React handler to replay, and the path lives in the editor node rather
+           than the DOM — so the takeover is "leave, then click the SAME chip again where the
+           editor lives". The draft travels with the Session, so the chip is still there in
+           the regular view and the host's own command does the opening. Matched by position,
+           because the label is the only stable thing in the DOM. */
+        const openComposerReference = (sessionId, index) => {
+          exitRequested = true
+          try {
+            ctx.uiWorkspace.openSession(sessionId)
+          } catch (error) {
+            console.error('[mixer] openSession failed on a composer chip; leaving the click alone', error)
+            exitRequested = false
+            return
+          }
+          const click = (frame) => {
+            /* The panel goes away asynchronously from React's point of view: firing before
+               that would land on the mixer's own capture handler and re-enter. */
+            if (ctx.layout.panelInfo.getSnapshot().activePanelId === PANEL_ID) {
+              if (frame + 1 < FILE_LINK_REPLAY_FRAMES) return nextFrame(() => click(frame + 1))
+              return console.error('[mixer] the mixer was still mounted when replaying a composer chip')
+            }
+            const chips = channelDom.composerChips()
+            const chip = chips[index] === undefined ? chips[0] : chips[index]
+            if (chip !== undefined && channelDom.replayComposerChip(chip)) return
+            /* The regular view's composer mounts a frame or two after the reveal. */
+            if (frame + 1 < FILE_LINK_REPLAY_FRAMES) return nextFrame(() => click(frame + 1))
+            console.error('[mixer] the composer chip was not there to re-click after leaving')
+          }
+          nextFrame(() => click(0))
         }
         ctx.effect(() => {
           const stopList = ctx.sessions.list.subscribe(() => {
@@ -2939,6 +3043,7 @@ window.__ModuleLoader__.load({
                possible the host's own handler (and its visible error) must still run. */
             canOpenFileLink,
             openFileLink,
+            openComposerReference,
             createSession,
             archiveSession,
             unarchiveSession,
