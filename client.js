@@ -151,6 +151,16 @@ window.__ModuleLoader__.load({
      */
     const FOCUS_RETRY_FRAMES = 30
     /**
+     * How many animation frames the file-link replay waits for the right Sidebar to be
+     * able to accept a write (spec §7.4 / ADR-0004). The Sidebar names the on-screen
+     * Session synchronously when the panel is deselected, but the per-Session store it
+     * opens INTO is adopted while the regular view renders — so the host's own
+     * `openResource` rejects for a frame or two after the reveal. Same shape as
+     * FOCUS_RETRY_FRAMES: bounded, and gives up quietly-ish (console) rather than
+     * swallowing the click.
+     */
+    const FILE_LINK_REPLAY_FRAMES = 8
+    /**
      * How many pixels ABOVE the host's own optical centre an empty channel's hero stack
      * sits (round 3, user feedback: 位置虽居中但整体观感偏下). Applied as
      * `margin-bottom`, NOT a transform: the host centres that stack with flex, so a
@@ -2849,21 +2859,35 @@ window.__ModuleLoader__.load({
             exitRequested = false
             return
           }
-          const run = () => {
+          /* The host's `openFile` is ASYNC (`ui-chat/apply.ts:258-263`), so a failure comes
+             back as a rejected promise rather than a throw — retry across frames like the
+             caret hand-off does, because the right Sidebar's per-Session store is adopted
+             when the regular view renders, which can be a frame or two after the reveal
+             (the name itself is written synchronously: spec §7.4). */
+          const attempt = (frame) => {
+            let result
             try {
               /* The host handler reads only `stopPropagation` off its event. */
-              replay({ stopPropagation: () => {} })
+              result = replay({ stopPropagation: () => {} })
             } catch (error) {
-              /* The mixer is already unmounted, so there is no bar left to report on;
-                 the user is on the right Session and can click the link again (ADR-0004). */
-              console.error('[mixer] replaying a file link after leaving failed', error)
+              result = Promise.reject(error)
             }
+            if (result === undefined || result === null || typeof result.then !== 'function') return
+            result.catch((error) => {
+              if (frame + 1 < FILE_LINK_REPLAY_FRAMES) {
+                if (typeof requestAnimationFrame === 'function') requestAnimationFrame(() => attempt(frame + 1))
+                else setTimeout(() => attempt(frame + 1), 16)
+                return
+              }
+              /* Out of frames: the mixer is already unmounted, so there is no bar left to
+                 report on. The user is on the right Session and the link is still there to
+                 click again (ADR-0004). */
+              console.error('[mixer] replaying a file link after leaving failed', error)
+            })
           }
-          /* The right Sidebar names the Session synchronously (its store flushes sync), but
-             the per-Session store it opens into is adopted during render, so the host's own
-             call only succeeds from the next frame (ADR-0004). */
-          if (typeof requestAnimationFrame === 'function') requestAnimationFrame(run)
-          else setTimeout(run, 0)
+          const start = () => attempt(0)
+          if (typeof requestAnimationFrame === 'function') requestAnimationFrame(start)
+          else setTimeout(start, 0)
         }
         ctx.effect(() => {
           const stopList = ctx.sessions.list.subscribe(() => {

@@ -460,8 +460,11 @@ v1.5.1 及以前，「常规视图」按钮调的是 `selectPanel('conversation'
   工具行链接渲染的是工具摘要、markdown 链接的 `title` 在图片预览时被丢掉、composer chip 只有 basename
   —— 从 DOM 拼路径覆盖不了主场景。
 - **顺序**：读闭包 → 判定可接管 → `preventDefault` + `stopPropagation` → 置闩 →
-  `openSession(该格会话)` → **下一帧**重放闭包（右栏的"在屏会话"名是同步写好的，但它要开进去的那份
-  per-Session store 在渲染时才被 mint，所以同 tick 会抛、下一帧才成）。
+  `openSession(该格会话)` → **跨帧重试**重放闭包（右栏的"在屏会话"名是同步写好的，但它要开进去的那份
+  per-Session store 在常规视图渲染时才被 mint，所以同 tick 必抛；**真机实测比"下一帧"还晚**，见下）。
+  重放是**有界**的：`FILE_LINK_REPLAY_FRAMES = 8` 帧，同 `FOCUS_RETRY_FRAMES` 那套"宿主画得晚"的解法。
+  宿主的 `openFile` 是 async，失败以 **rejected promise** 回来而不是抛错 —— 只 `try/catch` 是拦不住的，
+  这正是首版"切过去了但文件没打开、还没有任何提示"的成因（2026-10-28 真机实测抓到）。
 - **失效方向必须是安全的**：`sidebarRight` 用 `ctx.get` 可选读（不加 Cordis 边 —— 硬边会让没装右栏的
   profile 整页启动失败）；拿不到服务、元素上没有可重放的 `onClick`、或 `openSession` 抛错 → **什么都不做**，
   宿主自己的处理器照常跑，用户看到原来那个带「重试」的对话框（ADR-0004）。
@@ -719,9 +722,9 @@ DSH_REPO=/新的/checkout 路径 npm run check
 | `createViewState()` | **插件作用域视图状态**（§5.6 / §5.7 / §9.0j）：`subscribe/snapshot/setSolo/park/unpark/clearParked/parkedIds/handOff/take/publish/channels/commands/setActive/activeChannel`。solo + 移出 + 重挂交接 + **当前通道**的唯一所有者；前三个自己发通知，`publish`/`setActive` 刻意不发 |
 | `createChannelDom(doc?)` | **通道 DOM adapter**（§9.0j）：`channelOf/caretChannel/fileLinkOf/hostClickOf/paneOf/headOf/tabsOf/bodyOf/scrollerOf/fieldOf/reveal/focus`。`data-mixer-*` 与宿主钩子只在这里拼写；`focus` 返回 false 表示 composer 还没上屏（面板据此帧重试） |
 
-另有四条行为常量，**只在文档与代码注释里约定、不进 `__test`**（它们不是判断，是时序参数，钉一个数字等于写同义反复）：`FOCUS_RETRY_FRAMES = 30`（光标交接等宿主 composer 出现的帧数上限，§5.1③）、`RECLAIM_WINDOW_MS = 2000`（抢回判据的时效窗，§5.1）、`HERO_LIFT_PX = 48`（空会话 hero 的光学上调，§4.4）与 `ARCHIVE_UNDO_MS = 6000`（归档撤销的时效窗，镜像宿主 toast 的 hold，§5.2）。
+另有五条行为常量，**只在文档与代码注释里约定、不进 `__test`**（它们不是判断，是时序参数，钉一个数字等于写同义反复）：`FOCUS_RETRY_FRAMES = 30`（光标交接等宿主 composer 出现的帧数上限，§5.1③）、`RECLAIM_WINDOW_MS = 2000`（抢回判据的时效窗，§5.1）、`HERO_LIFT_PX = 48`（空会话 hero 的光学上调，§4.4）、`ARCHIVE_UNDO_MS = 6000`（归档撤销的时效窗，镜像宿主 toast 的 hold，§5.2）与 `FILE_LINK_REPLAY_FRAMES = 8`（文件链接重放等右栏接得住写入的帧数上限，§7.4 / ADR-0004）。
 
-后 4 条是 2026-10-15 第二轮新增（需求 1 / 2 / 4）。**用例数已落地**：v1 的 53 例 + 第二轮 15 例 = **68 例**全绿（`seams` +4、`render` +1、`interaction` +10）；第三轮再 +1（`interaction` 的「触发器要有按钮样」）；第四轮 +4（`seams` 的 `archiveActivityOf` + `interaction` 的归档过滤 / 悬停归档 / 停止并归档）；第五轮 +2（归档同步抛错 / 未提供 `archiveSession` 都要出提示，以及 `归档中…` 的进行中态）；第六轮 +1（`host-contract` 的 inject 名单哨兵）；第七轮 +1（`interaction` 的「替身虚影同尺寸/带真实头部/下一个 task 撤销」）；第八轮 +2（`interaction` 的「空会话虚影保留 hero 与 composer」「越界通道的虚影身体是骨架」）；第十一轮 **−1**（`landingWorkspace` 缝随「新建落点」退休一并删除，`interaction` 的左列用例原地改写为「跳转 + 行内新建」）；第十二轮 +4（`interaction` 的归档撤销三例：回原位/回宽度、失败与缺方法、只保留最新一条；`host-contract` 的归档撤销锚点）；第十三轮 +4（`interaction` 的通道跳转三例：跳第 N 个并聚焦、不吞键与越界提示、next/prev 首尾环绕；`host-contract` 的快捷键注册表锚点）；同轮修 +1（`host-contract` 的「默认键位过宿主校验」）；第十四轮 +3（`interaction` 的 solo 三例）;**第十五轮（架构评审落地）** +5（`seams` 新增 ledger / runner / view state / DOM adapter 四例 —— 每例把一个 module 的规则一次钉住；`host-contract` 新增 host-face 名单一致性哨兵）；第十六轮 +1（`interaction` 的「空板上新建通道保留可见通道」）；**第十七轮** +1（`interaction` 的「常规视图退到无面板」）；**第十八轮** +10（`seams` 四例：离开闩、`exitTargetOf`、`createViewState` 的当前通道、`createChannelDom` 的文件链接钩子；`interaction` 六例：常规视图落到当前通道、键盘跳转也算激活、空白会话退出不被抢回、文件链接切走后由宿主打开、拿不到闭包时放行、没有右栏时不接管）= **107 例**。`tests/harness.mjs` 的假宿主已补齐 `ctx.sessions.create` 的记录、`sessions.list` / `layout.panelInfo` 两个可订阅源（含 `setList` / `setPanelInfo` 驱动），并且 `useStore` 改成真的订阅 + 版本号重渲染——原来只读快照，导致"面板自己的写入"在测试里根本不会触发重渲染，`×` 关闭那条用例是靠别的原因才过的。
+后 4 条是 2026-10-15 第二轮新增（需求 1 / 2 / 4）。**用例数已落地**：v1 的 53 例 + 第二轮 15 例 = **68 例**全绿（`seams` +4、`render` +1、`interaction` +10）；第三轮再 +1（`interaction` 的「触发器要有按钮样」）；第四轮 +4（`seams` 的 `archiveActivityOf` + `interaction` 的归档过滤 / 悬停归档 / 停止并归档）；第五轮 +2（归档同步抛错 / 未提供 `archiveSession` 都要出提示，以及 `归档中…` 的进行中态）；第六轮 +1（`host-contract` 的 inject 名单哨兵）；第七轮 +1（`interaction` 的「替身虚影同尺寸/带真实头部/下一个 task 撤销」）；第八轮 +2（`interaction` 的「空会话虚影保留 hero 与 composer」「越界通道的虚影身体是骨架」）；第十一轮 **−1**（`landingWorkspace` 缝随「新建落点」退休一并删除，`interaction` 的左列用例原地改写为「跳转 + 行内新建」）；第十二轮 +4（`interaction` 的归档撤销三例：回原位/回宽度、失败与缺方法、只保留最新一条；`host-contract` 的归档撤销锚点）；第十三轮 +4（`interaction` 的通道跳转三例：跳第 N 个并聚焦、不吞键与越界提示、next/prev 首尾环绕；`host-contract` 的快捷键注册表锚点）；同轮修 +1（`host-contract` 的「默认键位过宿主校验」）；第十四轮 +3（`interaction` 的 solo 三例）;**第十五轮（架构评审落地）** +5（`seams` 新增 ledger / runner / view state / DOM adapter 四例 —— 每例把一个 module 的规则一次钉住；`host-contract` 新增 host-face 名单一致性哨兵）；第十六轮 +1（`interaction` 的「空板上新建通道保留可见通道」）；**第十七轮** +1（`interaction` 的「常规视图退到无面板」）；**第十八轮** +10（`seams` 四例：离开闩、`exitTargetOf`、`createViewState` 的当前通道、`createChannelDom` 的文件链接钩子；`interaction` 六例：常规视图落到当前通道、键盘跳转也算激活、空白会话退出不被抢回、文件链接切走后由宿主打开、拿不到闭包时放行、没有右栏时不接管）= **108 例**（第十八轮真机复验后又 +1：文件链接重放的跨帧重试）。`tests/harness.mjs` 的假宿主已补齐 `ctx.sessions.create` 的记录、`sessions.list` / `layout.panelInfo` 两个可订阅源（含 `setList` / `setPanelInfo` 驱动），并且 `useStore` 改成真的订阅 + 版本号重渲染——原来只读快照，导致"面板自己的写入"在测试里根本不会触发重渲染，`×` 关闭那条用例是靠别的原因才过的。
 
 **验证**：`npm run check`（语法 + **53 个用例** + 冷启动）在本机全绿；**浏览器行为已由用户按 §6 十条在根包上验收通过**（2026-10-15，装根包 + 卸 `dsh-mixer-spike` + 硬刷新；见 §6 验收记录）。
 **第二轮（需求 1–4）实现后的验证**：`npm run check` = **76 个用例全绿** + 冷启动 `PASS`（2026-10-15）；**§6 第 12–20 条属观感项，由用户在浏览器里逐条验收** —— 尤其"整格虚影"与"让位"两处只有真拖拽能验。
@@ -748,7 +751,8 @@ fast-forward，tag **`v1.5.2`** + GitHub Release。内容：**修 bug**（`55ccd
 **第十八轮（2026-10-28，退出跟随当前通道 + 调音台内文件链接，§9.0k / ADR-0004）**：`npm run check` = **107 个用例 + 冷启动 `PASS`**。
 - 「常规视图」改走 `ctx.uiWorkspace.openSession(当前通道的会话)`（§5.1）；**当前通道 = 显式激活过的通道**，进入后没动过任何格就保持原落点（"误入即退"不改主会话）。
 - 新增一次性「用户主动离开」闩，顺手修掉**"主会话是空白时退不出调音台"**这个既有 bug（`shouldReclaimPanel` 现在收 `userInitiatedExit`；宿主新建入口那条 reclaim 一字未变，ADR-0003 边界据此收窄）。
-- 调音台内的文件链接改为：capture 吞点击 → `openSession(该格会话)` → 下一帧重放宿主的 `onClick`（path + cwd 只在那个闭包里）。失效方向 = **放行原点击**；`sidebarRight` 用 `ctx.get` 可选读、不加服务边（ADR-0004）。
+- 调音台内的文件链接改为：capture 吞点击 → `openSession(该格会话)` → **跨帧重试**重放宿主的 `onClick`（path + cwd 只在那个闭包里）。失效方向 = **放行原点击**；`sidebarRight` 用 `ctx.get` 可选读、不加服务边（ADR-0004）。
+- **真机复验（沙箱宿主 4599 + 无头 Chrome，证据在 `repro-sidebarright/evidence/18-*`）**：R1 通过（进调音台前的会话是 B，激活 A 的通道后退出 → 落在 A）；R2 通过（点 A 通道里的链接 → 落在 A，右栏自动展开并出现该文件的新标签，内容正确、无对话框、无 `no session surface is mounted`）。**首版在这一步失败**：切换成功但文件没打开、也没有任何提示 —— 原因是宿主的 `openFile` 是 async，失败以 rejected promise 回来，`try/catch` 拦不住；改成 `FILE_LINK_REPLAY_FRAMES` 有界跨帧重试后通过，并补了一条用例钉住它。
 - 未做：composer `@` chip 接管、OS 打开通道。**待用户实机验收 §6.27 / §6.28 / §6.29**。
 
 **发布 v1.5.1（2026-10-21，空板新建 bug 修复 + 文档 + README 改版）**：`package.json` bump 到 `1.5.1`，`main` fast-forward，tag **`v1.5.1`** + GitHub Release。内容三项：① **修 bug**（`5c0e57f`）—— 空板上点 `＋会话` 会把其它**可见**通道挤掉：`acceptNewChannel` 拿"持久化的板"（可能为空数组）当插入基准，改用 `visibleRef`（看得见的板），回归用例先红后绿验证过（`interaction` 的「空板上新建通道保留可见通道」）；② 文档两条（`2e82168` 格内审批卡 §6.25 端到端实测、`c3b81c9` 侧栏折叠观察记为非 bug）；③ **README 改版**（`98461ce` / `30bb861`）—— 卖点先行 + 一行安装命令 + 上手指南 + 真实宿主截图（`docs/assets/`，含 `PROVENANCE.md`；主图三格同框：空对话 / 等待审批 / 执行中）。`npm run check` = 96 用例 + 冷启动 `PASS`；验证过的 DSH runtime：`0.2.1-rc.2`（checkout `687f282`）。

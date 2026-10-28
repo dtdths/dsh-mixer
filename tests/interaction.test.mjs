@@ -1144,3 +1144,38 @@ test('interaction: without a right Sidebar the plugin never takes a file link ov
   assert.deepEqual(ui.host.openSessionCalls, [])
   assert.ok(ui.$('[data-mixer-pane="s2"]') !== null)
 })
+
+test('interaction: the file-link replay retries while the right Sidebar is still adopting (§7.4)', async () => {
+  const { React } = hostModules()
+  let attempts = 0
+  let opened = 0
+  const ui = await loadInteractive({
+    renderFactorySlot: (name) => React.createElement('div', { 'data-factory': name },
+      React.createElement('button', {
+        type: 'button',
+        className: '_0NrVSW_fileLink_test',
+        onClick: () => {
+          attempts += 1
+          /* The host's own `openFile` is async, so an unadopted right-sidebar store comes
+             back as a REJECTION, not a throw (ui-chat/apply.ts:258-263). Real-machine
+             finding: it takes more than one frame after the reveal. */
+          if (attempts < 3) return Promise.reject(new Error('sidebarRight: no session surface is mounted'))
+          opened += 1
+          return Promise.resolve()
+        },
+      }, 'src/thing.ts')),
+  })
+  ui.draw({ board: { channels: ['s1', 's2'], weights: {} }, list, status, workspaces })
+  const { act, window } = ui
+  act(() => { ui.host.setPanelInfo({ activePanelId: 'mixer' }) })
+  const link = ui.$('[data-mixer-pane="s2"] [class*="fileLink"]')
+  await act(async () => {
+    link.dispatchEvent(new window.MouseEvent('click', { bubbles: true, cancelable: true }))
+    await new Promise(resolve => setTimeout(resolve, 300))
+  })
+  /* One exit, one landed Session, and the host handler eventually succeeds instead of
+     being lost to a single unlucky frame (FILE_LINK_REPLAY_FRAMES). */
+  assert.deepEqual(ui.host.openSessionCalls, ['s2'])
+  assert.equal(opened, 1, 'the host handler must eventually succeed')
+  assert.ok(attempts >= 3 && attempts <= 5, `expected a bounded retry, got ${attempts} attempts`)
+})
