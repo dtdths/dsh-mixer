@@ -91,15 +91,64 @@ function fakeDataTransfer(payload) {
   }
 }
 
+/**
+ * Sessions whose reference with one source was released, in release order.
+ * @param ui - the mounted panel handle.
+ * @param source - the retain source to filter on.
+ * @returns the Session ids.
+ */
+function releasedFrom(ui, source) {
+  return ui.host.releaseOptions
+    .filter(entry => entry.options !== undefined && entry.options.source === source)
+    .map(entry => entry.sessionId)
+}
+
+/**
+ * The host folds a Session's conversation only while a reference retains the
+ * `conversation` facet (ui-conversation `conversation/assembly.ts`, DSH 0.2.3). The
+ * pane must therefore retain it for as long as it is on screen: without that, every
+ * channel renders an empty transcript beside a working composer and real token stats —
+ * the 0.2.3 regression — and nothing throws.
+ */
+test('retention: a mounted channel retains the conversation facet, and only while it is on screen', async () => {
+  const ui = await mountTwo()
+
+  /* Both panes hold a rendering reference carrying the facet, separate from the
+     long-lived channel reference that carries the waiting signal. */
+  const facetRefs = ui.host.retainOptions.filter(entry => entry.options?.facets?.conversation === true)
+  assert.deepEqual(facetRefs.map(entry => entry.sessionId), ['s1', 's2'])
+  assert.deepEqual(facetRefs.map(entry => entry.options.source), ['mixerView', 'mixerView'])
+  const channelRefs = ui.host.retainOptions.filter(entry => entry.options?.source === 'mixerChannel')
+  assert.deepEqual(channelRefs.map(entry => entry.sessionId), ['s1', 's2'])
+  assert.ok(channelRefs.every(entry => entry.options.facets === undefined),
+    'the waiting-signal reference must stay facet-free, or closed channels keep folding')
+
+  /* Unmounting the pane (close) releases the facet; putting the channel back re-acquires
+     it, which is what folds the history again. */
+  const { act, window } = ui
+  act(() => { ui.$('[data-mixer-close="s1"]').dispatchEvent(new window.MouseEvent('click', { bubbles: true })) })
+  assert.deepEqual(releasedFrom(ui, 'mixerView'), ['s1'])
+  assert.deepEqual(releasedFrom(ui, 'mixerChannel'), [])
+
+  act(() => { ui.$('[data-mixer-hidden]').dispatchEvent(new window.MouseEvent('click', { bubbles: true })) })
+  assert.deepEqual(
+    ui.host.retainOptions.filter(entry => entry.options?.facets?.conversation === true).map(entry => entry.sessionId),
+    ['s1', 's2', 's1'],
+  )
+})
+
 test('interaction: closing a channel parks it, and the top bar puts it back', async () => {
   const ui = await mountTwo()
   const { act, window } = ui
 
   act(() => { ui.$('[data-mixer-close="s1"]').dispatchEvent(new window.MouseEvent('click', { bubbles: true })) })
   assert.deepEqual(ui.$$('[data-mixer-pane]').map(node => node.getAttribute('data-mixer-pane')), ['s2'])
-  /* Its reference is NOT released: the waiting signal must survive the close (§4.2). */
+  /* The CHANNEL reference is NOT released: the waiting signal must survive the close
+     (§4.2). The pane's own rendering reference is released — a closed channel must stop
+     folding its conversation (docs/plugin-gotchas.md §3b). */
   assert.ok(ui.host.retained.includes('s1'))
-  assert.ok(!ui.host.released.includes('s1'))
+  assert.deepEqual(releasedFrom(ui, 'mixerChannel'), [])
+  assert.deepEqual(releasedFrom(ui, 'mixerView'), ['s1'])
 
   const chip = ui.$('[data-mixer-hidden]')
   assert.ok(chip !== null, 'the top bar must offer the parked channels back')

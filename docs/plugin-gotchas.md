@@ -67,6 +67,27 @@ node boot-check.mjs  # 只跑冷启动
 - 内置会话页的写法：`packages/client/ui-conversation/src/client/apply.ts` 的 `children: { 'main.conversation': { kind: 'single', scope: 'session-maybe' } }`
 - 失败的静默性：少了它**不会报错**，只是每格渲染不出会话内容（第 1 轮原型就是这么空白的）
 
+### 3b. 0.2.3 起：会话内容只在你 retain 了 `conversation` facet 时才折叠
+
+DSH 0.2.3 把会话装配改成**按引用保留**：没有引用保留 `conversation` facet 时，会话照收事件，但它的
+Conversation binding **既不折叠也不发布**（`packages/client/ui-conversation/src/client/conversation/assembly.ts`
+的 `BoundConversation.follow` / `resume`）。读的人看到的是上一次发布过的快照 —— 对一个从没被保留过的
+会话，那就是构造时的空快照。
+
+- 症状（2026-11-23 实测，真机 + 无头 Chrome 都复现）：**每格对话区空白，只显示「已到会话开头」**，
+  而输入框、模型选择器、底部真实 token 统计（`1 轮 59 步·3.5M tok`）全都正常，**控制台零报错**。
+- 为什么只在调音台出现：常规视图由 `uiWorkspace.openSession` 以 `mainView` 保留并带上了 facet，所以
+  只要你先把那个会话在常规视图打开过，调音台的格子就有内容 —— 数据是**上一次发布**的残留，不是它在折叠。
+  换一个从没在常规视图打开过的会话，格子立刻空。
+- 修法：格子挂载时**额外**拿一个只活到卸载的引用
+  `ctx.sessions.retain(id, { source: 'mixerView', facets: { conversation: true } })`，卸载时 `release()`。
+  必须和「等待信号」那个长命引用分开：长命引用不带 facet，否则关掉/移出的通道会永远在折叠。
+- 判定方式：`ctx.sessions.retainInfo(id).getSnapshot().retainedFacets?.conversation`（宿主自己也这么读，
+  `ui-chat/apply.ts:112`）。
+- 回归测试：`tests/interaction.test.mjs` 的「retention: a mounted channel retains the conversation facet」。
+  它断言的是**与宿主的契约**（谁 retain、带不带 facet、什么时候放），因为宿主真正的折叠发生在宿主包里，
+  假宿主渲染不出真实 transcript。
+
 ## 相关设计约束（不属"坑"，但同样实测得来）
 
 - 侧边栏**无法归零**：折叠后仍是 56px 轨道（`packages/client/ui-layout/src/client/columns.ts:19,52-53`）。

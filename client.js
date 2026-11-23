@@ -108,6 +108,12 @@ window.__ModuleLoader__.load({
     /** Our own Session reference source; never `mainView` (see docs/adr/0001). */
     const SOURCE = 'mixerChannel'
     /**
+     * The source of the per-pane RENDERING reference (see `retainView`). Separate from
+     * `SOURCE` because it lives exactly as long as the pane does: a closed or parked
+     * channel must stop folding its conversation (docs/plugin-gotchas.md §3b).
+     */
+    const VIEW_SOURCE = 'mixerView'
+    /**
      * The three host renderings of "open this file" inside a channel, as one selector
      * (spec §7.4 / ADR-0004): the markdown body link (`_fileMention_… _fileLink_…`), the
      * tool-row link (`_<hash>_fileLink`), and a sent message's `@`-chip
@@ -1730,9 +1736,14 @@ window.__ModuleLoader__.load({
     function Pane(props) {
       const {
         sessionId, summary, summaries, waitingKind, views, state,
-        onClose, onDragStateChange, renderFactorySlot, solo, onToggleSolo,
+        onClose, onDragStateChange, renderFactorySlot, solo, onToggleSolo, retainView,
       } = props
       const isWaiting = waitingKind !== undefined
+      /* The host only folds this Session's conversation while a reference retains its
+         `conversation` facet, so the pane holds one for exactly as long as it is on
+         screen (docs/plugin-gotchas.md §3b). Without it the transcript is empty and the
+         composer below it still works. */
+      useEffect(() => retainView(sessionId), [retainView, sessionId])
       /* Empty channels render in the host's own hero phase (requirement 1). */
       const hero = heroFor(summary)
       /* null = follow the Session's own stored view. A string pins the view by
@@ -2007,7 +2018,7 @@ window.__ModuleLoader__.load({
 
     function Grid(props) {
       const {
-        ids, summaries, attention, states, SessionProvider, refFor,
+        ids, summaries, attention, states, SessionProvider, refFor, retainView,
         views, weights, onResize, onDropChannel, onClose, renderFactorySlot,
         soloId, onSolo, onExitSolo,
       } = props
@@ -2137,6 +2148,7 @@ window.__ModuleLoader__.load({
                 h(SessionProvider, { session: refFor(id) },
                   h(Pane, {
                     sessionId: id,
+                    retainView,
                     summary: summaries[id],
                     summaries,
                     waitingKind: attention[id] === undefined ? undefined : attention[id].kind,
@@ -2160,6 +2172,7 @@ window.__ModuleLoader__.load({
     function MixerPanel(props) {
       const {
         useSessions, useSessionStatus, useWorkspaces, SessionProvider, renderFactorySlot, refFor,
+        retainView,
         backToConversation, canOpenFileLink, openFileLink, openComposerReference,
         createSession, archiveSession, unarchiveSession,
         listViews, sidebar, useStore, actions,
@@ -2662,7 +2675,7 @@ window.__ModuleLoader__.load({
                 '用顶栏的工作区下拉勾选要关注的会话，只有勾中的会话会在这里列出。移除的会话不会停止，仍在等你的话顶栏会提示。'))
           : h(Grid, {
               ids: visible, summaries, attention, states,
-              SessionProvider, refFor, views, weights,
+              SessionProvider, refFor, retainView, views, weights,
               onResize: resizeChannels,
               onDropChannel: dropChannel,
               onClose: closeChannel, renderFactorySlot,
@@ -2770,6 +2783,42 @@ window.__ModuleLoader__.load({
             refs.set(sessionId, reference)
           }
           return reference
+        }
+        /**
+         * The reference one mounted pane holds for as long as it is on screen.
+         *
+         * Since DSH 0.2.3 the host folds a Session's conversation ONLY while some
+         * reference retains the `conversation` facet (`ui-conversation`
+         * `conversation/assembly.ts`: "While no reference retains it, the Session still
+         * receives events but its Conversation binding neither folds nor publishes").
+         * `refFor` above declares no facets — it exists for the waiting signal and the
+         * SessionProvider — so without this second reference every pane renders an empty
+         * transcript, with a working composer and real token stats beside it, and nothing
+         * errors (docs/plugin-gotchas.md §3b).
+         *
+         * Held by the PANE, not by `refFor`, so a closed or parked channel releases it
+         * and stops folding; `refFor`'s reference still outlives the view.
+         *
+         * Returns the RELEASE function (never a reference) so an effect can hand it back
+         * as its cleanup, and so a Session that vanished under a stale channel degrades
+         * to a logged no-op instead of throwing inside a commit.
+         * @param sessionId - the channel's Session.
+         * @returns the disposer the pane calls on unmount.
+         */
+        const retainView = (sessionId) => {
+          try {
+            const reference = ctx.sessions.retain(sessionId, {
+              source: VIEW_SOURCE,
+              facets: { conversation: true },
+            })
+            reference.ready.catch((error) => {
+              console.error('[mixer] Session open failed', sessionId, error)
+            })
+            return () => reference.release()
+          } catch (error) {
+            console.error('[mixer] Session view retain failed', sessionId, error)
+            return () => {}
+          }
         }
         /* Closing a channel keeps its reference: the signal that it is waiting on you
            must survive leaving the layout, or the whole point is lost. References also
@@ -3045,6 +3094,7 @@ window.__ModuleLoader__.load({
           store: boardStore,
           inject: () => ({
             refFor,
+            retainView,
             /* Leave to the DEFAULT Conversation — `activePanelId === null` — not to
                the reserved `conversation` panel KEY. The right Sidebar names its
                on-screen Session only while no panel is selected (`ui-sidebar-right`

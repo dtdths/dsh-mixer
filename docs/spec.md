@@ -109,6 +109,21 @@ const reference = ctx.sessions.retain(sessionId, { source: 'mixerChannel' })
 - **释放时机**：只在**插件卸载**时统一释放；**离开调音台视图不释放**。等待信号只对已 retain 的会话产生，释放即失去"不看它也知道它在等你"的能力。
 - **代价**：这些会话作用域常驻（每格 retain 会触发 `Session.open()`），规模由用户的选择集合决定；溢出策略见 §5.4。
 
+**第二个引用：渲染引用（DSH 0.2.3 起，必需）**
+
+```js
+// 挂在格子（Pane）上，只活到格子卸载；不带 waiting 语义，只带 conversation facet。
+const reference = ctx.sessions.retain(sessionId, {
+  source: 'mixerView',
+  facets: { conversation: true },
+})
+// Pane 的 useEffect 返回 reference.release，关掉/移出通道即释放
+```
+
+- **为什么必须有两个**：0.2.3 起宿主的会话装配按引用保留 —— 没有引用保留 `conversation` facet 时，会话照收事件但**既不折叠也不发布**（`ui-conversation/conversation/assembly.ts`）。§4.2 那个长命引用**故意不带 facet**（否则关掉的通道永远在折叠），所以格子必须自己再拿一个。
+- **症状识别**：对话区空白、只显示「已到会话开头」，输入框和真实 token 统计都正常，控制台零报错。详见 [plugin-gotchas §3b](./plugin-gotchas.md)。
+- **只随格子存活**：solo 折叠成窄条、移出、关掉 × 都会卸载格子 → 释放 → 停止折叠；放回来时重新保留，宿主会补折一次（`BoundConversation.resume`）。
+
 ### 4.3 等待与执行状态
 
 ```js

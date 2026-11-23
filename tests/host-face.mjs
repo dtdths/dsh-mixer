@@ -57,6 +57,11 @@ export function createHostFace({ viewEntries = [] } = {}) {
     commands: [],
     retained: [],
     released: [],
+    /* The full retain/release arguments, so a test can pin WHY a reference exists:
+       the long-lived channel reference (waiting signal) and the pane's rendering
+       reference (`conversation` facet) are different things. */
+    retainOptions: [],
+    releaseOptions: [],
     selectPanel: [],
     create: [],
     archive: [],
@@ -91,9 +96,16 @@ export function createHostFace({ viewEntries = [] } = {}) {
       entries: (name) => (name === 'conversation.view' ? viewEntries : []),
     },
     sessions: {
-      retain: (sessionId) => {
+      retain: (sessionId, options) => {
         calls.retained.push(sessionId)
-        return { ready: Promise.resolve(), release: () => calls.released.push(sessionId) }
+        calls.retainOptions.push({ sessionId, options })
+        return {
+          ready: Promise.resolve(),
+          release: () => {
+            calls.released.push(sessionId)
+            calls.releaseOptions.push({ sessionId, options })
+          },
+        }
       },
       create: (options) => {
         calls.create.push(options)

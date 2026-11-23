@@ -204,6 +204,8 @@ export function createHost(definition, { viewEntries = DEFAULT_VIEW_ENTRIES } = 
     ctx,
     retained: face.calls.retained,
     released: face.calls.released,
+    retainOptions: face.calls.retainOptions,
+    releaseOptions: face.calls.releaseOptions,
     main,
     selectPanelCalls: face.calls.selectPanel,
     createCalls: face.calls.create,
@@ -305,7 +307,11 @@ export async function loadRendered(options = {}) {
     return { html: renderToStaticMarkup(React.createElement(host.main.component, props)), instance, props }
   }
 
-  return { definition, registrations: host.registrations, commands: host.commands, ctx: host.ctx, render, retained: host.retained, released: host.released, React }
+  return {
+    definition, registrations: host.registrations, commands: host.commands, ctx: host.ctx, render,
+    retained: host.retained, released: host.released,
+    retainOptions: host.retainOptions, releaseOptions: host.releaseOptions, React,
+  }
 }
 
 /**
