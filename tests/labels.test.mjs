@@ -44,10 +44,18 @@ test('labels: every waiting kind uses the sidebar\'s own wording', () => {
   assert.equal(labels.kinds.question, host.waitingAnswer)
 })
 
-test('labels: running / completed / idle use the sidebar\'s own wording', () => {
+test('labels: every state uses the sidebar\'s own wording, and no extra state exists', () => {
   assert.equal(labels.states.running, host.running)
-  assert.equal(labels.states.completed, host.completed)
   assert.equal(labels.states.idle, host.idle)
+  assert.equal(labels.states.unread, host.unread)
+  assert.equal(labels.states.failed, host.failed)
+  /* "多余的删除" (user, 2026-11-23): the sidebar dropped `status.completed` — a finished
+     Session reads 未读 / 运行出错 now — so the plugin must not keep its own 已完成
+     synonym. The key set is pinned, not just the values, or a dead word survives here. */
+  assert.deepEqual(Object.keys(labels.states).sort(), ['failed', 'idle', 'running', 'unread'])
+  for (const key of Object.keys(labels.states)) {
+    assert.ok(host[key] !== undefined, `the sidebar has no status.${key}: delete the label`)
+  }
 })
 
 test('labels: the subagent label interpolates like the sidebar\'s one/other forms', () => {
@@ -61,7 +69,9 @@ test('labels: the rendered dots carry exactly those strings (no second copy can 
   assert.equal(channelState({ pendingKind: undefined, running: true, subagents: 2, completed: false })
     .dots[1].label, fill(host['subagentsRunning.other'], 2))
   assert.equal(channelState({ pendingKind: undefined, running: false, subagents: 0, completed: true })
-    .dots[0].label, host.completed)
+    .dots[0].label, host.unread)
+  assert.equal(channelState({ pendingKind: undefined, running: false, subagents: 0, completed: true, failed: true })
+    .dots[0].label, host.failed)
   assert.equal(channelState({ pendingKind: undefined, running: false, subagents: 1, completed: false })
     .dots[0].label, fill(host['subagentsRunning.one'], 1))
 })

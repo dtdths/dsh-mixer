@@ -34,7 +34,7 @@ const {
 } = seams
 
 const stateOf = input => channelState({
-  pendingKind: undefined, running: false, subagents: 0, completed: false, ...input,
+  pendingKind: undefined, running: false, subagents: 0, completed: false, failed: false, ...input,
 })
 
 test('channelState: waiting owns the stripe, so it renders no primary dot', () => {
@@ -70,10 +70,23 @@ test('channelState: subagents alone are the primary state', () => {
   assert.deepEqual(state.dots.map(dot => dot.size), [12])
 })
 
-test('channelState: completed is the green dot', () => {
+test('channelState: a finished-unread channel is the green dot, worded 未读', () => {
   const state = stateOf({ completed: true })
-  assert.equal(state.key, 'completed')
-  assert.deepEqual(state.dots.map(dot => [dot.state, dot.label]), [['done', '已完成']])
+  assert.equal(state.key, 'unread')
+  assert.deepEqual(state.dots.map(dot => [dot.state, dot.label]), [['done', '未读']])
+})
+
+test('channelState: a finished FAILED channel is the red dot, worded 运行出错', () => {
+  /* Same slot, two wordings — exactly the sidebar's completion reminder
+     (`Rows.tsx` sessionStatuses: failed ? status.failed : status.unread). */
+  const state = stateOf({ completed: true, failed: true })
+  assert.equal(state.key, 'failed')
+  assert.deepEqual(state.dots.map(dot => [dot.state, dot.label]), [['error', '运行出错']])
+})
+
+test('channelState: failed without completed is not a completion reminder', () => {
+  /* The host only offers `completionFailed` alongside `completionUnread`. */
+  assert.equal(stateOf({ failed: true }).key, 'idle')
 })
 
 test('channelState: idle renders nothing but still names the state', () => {

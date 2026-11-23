@@ -145,20 +145,23 @@ test('host contract: a root store instance is still created without a key (persi
   )
 })
 
-test('host contract: the sidebar row state we mirror still comes from the same four facts', () => {
+test('host contract: the sidebar row state we mirror still comes from the same five facts', () => {
   const tree = read('packages/client/ui-workspace/src/client/tree.ts')
   assert.match(tree, /status\?\.running \?\? s\.running/, 'the running fallback (status ?? list row) moved')
   assert.match(tree, /status\?\.completionUnread === true/, 'the completed-unread source moved')
+  /* 2026-11-23 (0.2.3): a completion reminder now has a second face — the red 运行出错
+     dot — so the failure fact has to be read from the same place as the unread one. */
+  assert.match(tree, /status\?\.completionFailed === true/, 'the completion-failed source moved')
   assert.match(tree, /values\.subagentCatalog/, 'the subagent catalog projection moved: the second dot would stop lighting')
 
   const rows = read('packages/client/ui-workspace/src/client/rows/Rows.tsx')
-  /* The four facts the row state is computed from, verbatim. (Some anchors below are
+  /* The facts the row state is computed from, verbatim. (Some anchors below are
      intentionally "present somewhere in the file" rather than unique: the point is
      that the mechanism still exists, not that it occurs once.) */
   assert.match(
     rows,
-    /node: Pick<SessionNode, 'pendingInteraction' \| 'running' \| 'runningSubagentCount' \| 'completed'>/,
-    'the four facts behind the sidebar row state changed shape',
+    /node: Pick<SessionNode, 'pendingInteraction' \| 'running' \| 'runningSubagentCount' \| 'completed' \| 'failed'>/,
+    'the facts behind the sidebar row state changed shape',
   )
   for (const kind of ['approval', 'plan-review', 'question']) {
     assert.match(rows, new RegExp(`case '${kind}'`), `the sidebar no longer treats ${kind} as visible waiting`)
@@ -181,13 +184,15 @@ test('host contract: the archive-undo we mirror still exists, with the same hold
   assert.match(index, /undoArchive: unarchiveSession/,
     'the sidebar undo no longer maps to unarchiveSession: the mixer would drift from the host action')
   /* The host moved the hold from a `LONG_TOAST_HOLD_MS` constant in RowActionToast to
-     per-notice `holdMs` values in `toast/register.ts` (DSH 0.2.1-rc.2, 2026-10-21). The
-     number is what we mirror, so that is what is anchored. */
+     per-notice `holdMs` values in `toast/register.ts` (DSH 0.2.1-rc.2, 2026-10-21), and
+     then folded the two archive notices into ONE loop over the notice kinds (0.2.3):
+     the text now comes from the notice (`notice.message ?? t(\`toast.${kind}\`)`). The
+     number is what we mirror, so the number and the undo action are what are anchored. */
   const toast = read('packages/client/ui-workspace/src/client/toast/register.ts')
-  assert.match(toast, /text: t\('toast\.archived'\), tone: 'success', holdMs: 6000/,
+  assert.match(toast, /for \(const key of \['archived', 'stoppedAndArchived'\] as const\)/,
+    'the archive-notice loop moved: the undo hold below no longer covers both notices')
+  assert.match(toast, /holdMs: 6000,\n\s+actions: \[\{ label: t\('toast\.archivedUndo'\)/,
     'the archived-toast hold moved: ARCHIVE_UNDO_MS mirrors this number')
-  assert.match(toast, /text: t\('toast\.stoppedAndArchived'\), tone: 'success', holdMs: 6000/,
-    'the stopped-and-archived hold moved')
   const locales = read('packages/client/ui-workspace/src/client/locales.ts')
   assert.match(locales, /'toast\.archivedUndo': '撤销'/, 'the host undo wording moved')
 })

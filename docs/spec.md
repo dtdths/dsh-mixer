@@ -117,6 +117,7 @@ const entry = status.get(sessionId)
 entry.pendingInteraction   // { kind: 'approval' | 'plan-review' | 'question', key, sessionId } | undefined
 entry.running              // boolean | undefined（当前执行/思考）
 entry.completionUnread     // boolean
+entry.completionFailed     // boolean（0.2.3 起；只在 completionUnread 为真时有意义）
 ```
 
 契约限制（决定 UI 上限，别试图绕过）：
@@ -135,17 +136,19 @@ entry.completionUnread     // boolean
 | 1 | `pendingInteraction.kind` ∈ `approval` / `plan-review` / `question` | `warning`（琥珀） | 等待审批 / 计划待审 / 等待回答 |
 | 2 | `running` | `ongoing`（转圈） | 进行中 |
 | 3 | `runningSubagentCount > 0` | `ongoing`（**并列的第二个点**） | `{n} 个子智能体运行中` |
-| 4 | `completed`（= `completionUnread`） | `done`（绿） | 已完成 |
+| 4 | `completed`（= `completionUnread`） | `done`（绿） | 未读（`status.unread`） |
+| 4′ | 同上且 `completionFailed` | `error`（红） | 运行出错（`status.failed`） |
 | 5 | 兜底 | `idle`（灰） | 空闲 |
 
-- **判据出处**（实现时照抄，不要自创）：展示优先级 `pending > running > subagents > completed > idle`，见 `ui-workspace/src/client/rows/Rows.tsx:347-397`；字段派生见 `ui-workspace/src/client/tree.ts:397-418`；点词汇见 `ui-primitives/src/StateDot.tsx:9`。`error` 那一档侧栏会话行**不用**，本插件也不做。
+- **判据出处**（实现时照抄，不要自创）：展示优先级 `pending > running > subagents > completed > idle`，见 `ui-workspace/src/client/rows/Rows.tsx`（`sessionStatuses`）；字段派生见 `ui-workspace/src/client/tree.ts`（`sessionNode`）；点词汇见 `ui-primitives/src/StateDot.tsx`。
+- **第 4 档是「同一档、两种措辞」**（0.2.3 起）：宿主把完成提醒写成 `failed ? status.failed : status.unread` —— 绿点读「未读」，红点（`error`）读「运行出错」。侧栏**已删除** `status.completed`，所以本插件也**不再有**「已完成」这个词；`STATE_LABEL` 只允许出现宿主字典里有的键（`tests/labels.test.mjs` 钉住键集，不只是值）。
 - **子代理第 3 档是叠加的，不是替代**：侧栏在有等待或执行中时仍会**并排**画出子代理那个点（`Rows.tsx:389-393`）。本插件同样在状态点右侧再加一个 `ongoing` 点（`size: 10`），tooltip 用侧栏同款「N 个子智能体运行中」。
 - **`visiblePendingKind` 白名单**：宿主只把 `approval` / `plan-review` / `question` 三种作为**可见**等待；其它域注册进来的 kind 会被过滤掉（`tree.ts:379-388`）。本插件必须同样只认这三种，否则会把别人域里的信号误当等待。
 - **`running` 的回落**：`status.running ?? summary.running`（状态源尚未建立基线时用列表摘要兜底），与 `tree.ts:410` 一致；不要只看 `useSessionStatus`。
 - **子代理计数怎么拿**：`runningSubagentCount` **不在** `useSessionStatus` 里，要从会话列表快照算 —— `list.projectionsBySession[id]?.values.subagentCatalog` 里 `running === true` 的子项个数（`list` 就是 `useSessions(state => state)`，`projectionsBySession` 是 `SessionListState` 的公开字段）。算法照抄 `tree.ts:390-395`，**别自造口径**。
-- **渲染分工**（保持已认可的观感，只补档位）：等待档继续用头部左侧 2px `state-warn-primary` 竖条 + tooltip（不换成点）；执行中 / 子代理 / 已完成三档用宿主 `StateDot`，画在面包屑之前。`size: 12`；子代理那个并列点用 `size: 10`（主状态点已在旁边时，它明显是"附加"）。
+- **渲染分工**（保持已认可的观感，只补档位）：等待档继续用头部左侧 2px `state-warn-primary` 竖条 + tooltip（不换成点）；执行中 / 子代理 / 未读·出错三档用宿主 `StateDot`，画在面包屑之前。`size: 12`；子代理那个并列点用 `size: 10`（主状态点已在旁边时，它明显是"附加"）。
 - **空闲档不画点**（用户 2026-10-15 决定，看过后选的）：全档对齐会让每个格子头部常驻一个灰点，实测判定为噪声。因此 **idle 是本插件唯一一处与侧栏的有意偏差**：其余四档必须与侧栏一致，空闲的格子**什么都不显示**。状态判断本身**不简化** —— `channelState()` 照旧返回 `key: 'idle'`，它同时写在每格根节点的 `data-mixer-state` 上（`SHOW_IDLE_DOT` 只控制画不画那个点）。
-- **怎么核对**：正式版**没有诊断行**（那是原型的脚手架，已删）。判据落在两处：① 每格根节点带 `data-mixer-state`（`waiting` / `running` / `subagents` / `running+subagents` / `completed` / `idle`），devtools 里一眼可读；② `channelState` 的优先级与配对由 `tests/seams.test.mjs` 逐档钉住（`npm test`）。原型时期的粘贴式读数与「（模拟）」标注留在 `spike/mixer-two-pane` 分支上。
+- **怎么核对**：正式版**没有诊断行**（那是原型的脚手架，已删）。判据落在两处：① 每格根节点带 `data-mixer-state`（`waiting` / `running` / `subagents` / `running+subagents` / `unread` / `failed` / `idle`），devtools 里一眼可读；② `channelState` 的优先级与配对由 `tests/seams.test.mjs` 逐档钉住（`npm test`）。原型时期的粘贴式读数与「（模拟）」标注留在 `spike/mixer-two-pane` 分支上。
 - ⚠️ **`completionUnread` 的语义陷阱**：它由 `ui-session` 内部的 `isMain()`（即 `retainedBy.mainView > 0`）或下一轮 `running === true` 清除（`ui-session/src/client/index.ts:485-505`）。本插件的通道用**自己的** `mixerChannel` 引用来源（§4.2、ADR-0001），**不是** `mainView`，所以"在调音台里盯着这一格看"**不会**把绿点清掉，它要等该会话下一轮跑起来才灭。两选一（见 §9）：接受这个语义（绿点 = "跑完了一轮、你还没把它切回主视图"，对调音台其实合理），或本插件自己维护一份 seen 集合、只在插件内算未读。**v1 取前者**。
 
 ### 4.4 会话内容渲染
@@ -239,7 +242,7 @@ renderFactorySlot('conversation.content', input, { slots: { views: Views } })
 
 - **面包屑**：由 `parentId` 上溯生成（最多 6 级、带环保护）；祖先用次级文字，末级加粗。子会话显示成 `父 / 子`。
   **头部尺寸要求**（用户反馈"太小、标题看不清"）：头部行 `padding: 7px 12px`、字号 `12.5px`；祖先面包屑 `12.5px`，**末级标题 `14px`/600 字重**；视图标签 `12.5px`、`padding: 6px 11px`。不要再做回 11px 那一档。
-- **状态标记与左侧会话行一一对应**（用户 2026-10-15 决定，判据表见 **§4.3b**）：四档 —— 等待 / 执行中 / 子代理运行中 / 已完成未读 —— 都必须与左侧会话行**同源、同判据、同词汇**；第五档 idle 是唯一有意偏差（**不画点**，§4.3b）。等待用竖条，其余三档用宿主 `StateDot`，全部画在面包屑之前。**不要另造一套状态语义**（例如自定义颜色、自绘转圈、把"完成"画成别的形状）。
+- **状态标记与左侧会话行一一对应**（用户 2026-10-15 决定，判据表见 **§4.3b**）：四档 —— 等待 / 执行中 / 子代理运行中 / 未读（含失败的「运行出错」）—— 都必须与左侧会话行**同源、同判据、同词汇**；第五档 idle 是唯一有意偏差（**不画点**，§4.3b）。等待用竖条，其余三档用宿主 `StateDot`，全部画在面包屑之前。**不要另造一套状态语义**（例如自定义颜色、自绘转圈、把"完成"画成别的形状）。
 - **执行中 loading**：会话正在执行/思考时，在面包屑**之前**显示指示。**直接复用宿主自己的状态点**，不要自绘：
 
   ```js
@@ -346,7 +349,7 @@ e.dataTransfer.setData('text/plain', node.id)   // node.id 就是 SessionId
 
 调音台的常态是并排；solo 是**临时的视觉聚焦**，不是"关掉通道"。
 
-- **形态**（用户 2026-10-20 定）：被 solo 的通道占满剩余宽度，其余通道**压成 64px 窄条**（`SOLO_STRIP_W`）。窄条上保留**状态点**（等待 = 琥珀点、执行中 = 宿主 `StateDot` 转圈、子代理 = 第二个点、已完成 = 绿点）与被截断的标题，悬停出 tooltip 给全名与状态；整条可点、可键盘聚焦（`role="button"`），点一下改成 solo 那一个。
+- **形态**（用户 2026-10-20 定）：被 solo 的通道占满剩余宽度，其余通道**压成 64px 窄条**（`SOLO_STRIP_W`）。窄条上保留**状态点**（等待 = 琥珀点、执行中 = 宿主 `StateDot` 转圈、子代理 = 第二个点、未读 = 绿点、失败 = 红点）与被截断的标题，悬停出 tooltip 给全名与状态；整条可点、可键盘聚焦（`role="button"`），点一下改成 solo 那一个。
 - **窄条怎么和主通道分开**（2026-10-20 用户反馈「缺少明显的分界，几乎找不到」）：
   1. 窄条用自己的**凹陷表面** `--dsw-alias-bg-skeleton`（浅色 4% 墨 / 深色 8% 白）。**不能用 `bg-layer-1/2`** —— 它们在浅色主题里就是纯白，窄条与主通道完全同色；也不能用宿主的 sidebar 填色（`--dsw-specific-sidebar-fill` 浅色下与白只差 6/255）。
   2. 每条窄条右缘一条 `--dsw-alias-border-l2` 的 1px 分界线（用 `box-shadow: inset` 画，不吃 64px 宽度；相邻两条窄条之间正好共享这一条线）。
@@ -372,7 +375,7 @@ e.dataTransfer.setData('text/plain', node.id)   // node.id 就是 SessionId
    `variant: 'embedded'`、每格一份，见 `tests/render.test.mjs`。）
 5. **独立**：两格的输入框草稿互不干扰（同一会话放进两格会共享草稿，这是契约）。（只有浏览器能验。）
 6. **等待态**：制造一次需要授权/确认的操作，对应通道应出现 V2 标记，且顶栏汇总计数 +1。三种 kind（审批 / 计划确认 / 提问）都要出标记；域注册的其它 kind **不应**出标记（§4.3b 白名单）。
-7. **状态四档对齐侧栏 + 空闲无标记**（用户 2026-10-15 新增）：同一会话在左侧会话行与调音台格子里同时可见时，逐档核对一致 —— 等待（琥珀 + 竖条）、执行中（转圈）、子代理运行中（**第二个**转圈点）、已完成未读（绿点）；**空闲时格子头部不出现任何标记**（§4.3b 的唯一有意偏差，侧栏那边是灰点）。绿点的清除时机按 §4.3b 的说明核对（本插件不负责清除，下一轮 `running` 才灭）。
+7. **状态四档对齐侧栏 + 空闲无标记**（用户 2026-10-15 新增）：同一会话在左侧会话行与调音台格子里同时可见时，逐档核对一致 —— 等待（琥珀 + 竖条）、执行中（转圈）、子代理运行中（**第二个**转圈点）、未读（绿点，文案「未读」）/ 失败的完成提醒（红点，「运行出错」）；**空闲时格子头部不出现任何标记**（§4.3b 的唯一有意偏差，侧栏那边是灰点）。绿点的清除时机按 §4.3b 的说明核对（本插件不负责清除，下一轮 `running` 才灭）。
 8. **持久化**：改动下拉里的勾选 → 刷新 → 选择仍在；拖动分界线改宽度 → 刷新 → **每格相对宽比不变**（§4.1 / §5.4）。
 9. **归档联动**：把某个已选通道的会话在左侧归档 → 它应从调音台消失（且期间列表未就绪时不会误清空面板），其宽度权重一并清掉。
 10. **退出**：点「常规视图」或左侧会话行 → 回到常规，滚动位置与草稿仍在；侧栏恢复原状。

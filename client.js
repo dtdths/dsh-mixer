@@ -614,7 +614,12 @@ window.__ModuleLoader__.load({
        row applies (tree.ts:379-388); other domains register their own kinds and must
        not light our channels. */
     const VISIBLE_PENDING_KINDS = ['approval', 'plan-review', 'question']
-    const STATE_LABEL = { running: '进行中', completed: '已完成', idle: '空闲' }
+    /* The host's own `status.*` keys, and ONLY those (2026-11-23: the sidebar dropped
+       `status.completed` — a finished-but-unread Session now reads `status.unread`, or
+       `status.failed` when that turn ended in an error; `Rows.tsx` `sessionStatuses`).
+       There is deliberately no local synonym: a word the sidebar does not use is a word
+       this plugin must not invent (spec §4.3b, `tests/labels.test.mjs`). */
+    const STATE_LABEL = { running: '进行中', idle: '空闲', unread: '未读', failed: '运行出错' }
     const subagentsLabel = n => `${n} 个子智能体运行中`
     /**
      * One line of human-readable text for a create failure. The host reports its own
@@ -820,14 +825,15 @@ window.__ModuleLoader__.load({
      * precedence lives here, so the pane header, the top-bar summary and the tests
      * cannot drift apart.
      *
-     * Precedence and pairing mirror `ui-workspace/src/client/rows/Rows.tsx:347-397`
-     * exactly: pending outranks running; a running-subagent dot is CO-displayed
-     * beside pending or running rather than replacing them; then completed, then
-     * idle.
+     * Precedence and pairing mirror `ui-workspace/src/client/rows/Rows.tsx`
+     * (`sessionStatuses`) exactly: pending outranks running; a running-subagent dot is
+     * CO-displayed beside pending or running rather than replacing them; then the
+     * completion reminder, then idle.
      * @param input.pendingKind - sidebar-visible pending kind, or undefined.
      * @param input.running - live running flag, already falling back to the row's.
      * @param input.subagents - number of running subagent rows.
      * @param input.completed - the row's completionUnread.
+     * @param input.failed - the row's completionFailed (only meaningful with `completed`).
      * @returns the state key plus its dot descriptors in render order.
      */
     function channelState(input) {
@@ -841,7 +847,12 @@ window.__ModuleLoader__.load({
       } else if (input.subagents > 0) {
         dots.push(dot('subagents', 'ongoing', 12, subagentsLabel(input.subagents)))
       } else if (input.completed === true) {
-        dots.push(dot('completed', 'done', 12, STATE_LABEL.completed))
+        /* The host's completion reminder is one slot with two wordings: a green `done`
+           dot reading 未读, or a red `error` dot reading 运行出错 when that turn failed
+           (`Rows.tsx` `sessionStatuses` → `status.unread` / `status.failed`). */
+        dots.push(input.failed === true
+          ? dot('failed', 'error', 12, STATE_LABEL.failed)
+          : dot('unread', 'done', 12, STATE_LABEL.unread))
       } else if (SHOW_IDLE_DOT) {
         dots.push(dot('idle', 'idle', 12, STATE_LABEL.idle))
       }
@@ -1887,7 +1898,7 @@ window.__ModuleLoader__.load({
 
     /**
      * A channel that solo folded away (spec §5.7): 64px, the same state vocabulary as a
-     * full channel (waiting / running / subagents / completed), and a title short enough
+     * full channel (waiting / running / subagents / unread / failed), and a title short enough
      * to recognise. Clicking it soloes that channel instead — solo is a view state, so
      * folding must never hide the fact that a channel is waiting on you.
      */
@@ -2369,6 +2380,7 @@ window.__ModuleLoader__.load({
             ? false
             : isSubagentRunning(child.id, status, summaries)),
           completed: entry !== undefined && entry.completionUnread === true,
+          failed: entry !== undefined && entry.completionFailed === true,
         })
       })
       const hiddenWaiting = parked.filter(id => attention[id] !== undefined).length

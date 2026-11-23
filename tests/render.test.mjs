@@ -39,7 +39,7 @@ test('render: every pane shows its own state marker, and the sidebar parity hold
   /* s1 waits, s2 finished unread, s3 runs with one running subagent. */
   assert.match(html, /data-mixer-pane="s1"[^>]*data-mixer-state="waiting"/)
   assert.match(html, /data-mixer-pane="s1"[^>]*data-mixer-waiting="yes"/)
-  assert.match(html, /data-mixer-pane="s2"[^>]*data-mixer-state="completed"/)
+  assert.match(html, /data-mixer-pane="s2"[^>]*data-mixer-state="unread"/)
   assert.match(html, /data-mixer-pane="s3"[^>]*data-mixer-state="running\+subagents"/)
 
   /* The two-element page shows all three default channels (no board picked yet). */
@@ -163,8 +163,20 @@ test('render: idle panes carry the state marker but render no dot', async () => 
   const { html } = render({ board: { channels: ['s1'], weights: {} }, list, status: idle, workspaces })
   assert.match(html, /data-mixer-pane="s1"[^>]*data-mixer-state="idle"/)
   assert.doesNotMatch(html, /aria-label="进行中"/)
-  assert.doesNotMatch(html, /aria-label="已完成"/)
+  assert.doesNotMatch(html, /aria-label="未读"/)
+  assert.doesNotMatch(html, /aria-label="运行出错"/)
   assert.equal((html.match(/data-mixer-pane=/g) ?? []).length, 1)
+})
+
+test('render: a failed completion reminder is the red dot, not the green one', async () => {
+  const { render } = await loadRendered()
+  const failed = new Map([['s1', {
+    running: false, pendingInteraction: undefined, completionUnread: true, completionFailed: true,
+  }]])
+  const { html } = render({ board: { channels: ['s1'], weights: {} }, list, status: failed, workspaces })
+  assert.match(html, /data-mixer-pane="s1"[^>]*data-mixer-state="failed"/)
+  assert.match(html, /aria-label="运行出错"/)
+  assert.doesNotMatch(html, /aria-label="未读"/)
 })
 
 test('render: the board decides which channels show, and the weights reach the flex style', async () => {
